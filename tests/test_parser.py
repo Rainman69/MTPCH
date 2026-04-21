@@ -1,9 +1,13 @@
-"""Unit tests for the parser and secret decoder."""
+"""Unit tests for the parser, secret decoder and source helpers."""
 
+import argparse
+import io
 import json
+import sys
 import unittest
+from unittest import mock
 
-from mtpch import parser
+from mtpch import parser, sources
 from mtpch.verifier import decode_secret
 
 
@@ -80,6 +84,73 @@ class TestParser(unittest.TestCase):
     def test_deduplicates(self):
         text = self.LINK_TG + "\n" + self.LINK_TG
         self.assertEqual(len(parser.extract_from_text(text)), 1)
+
+
+class TestBuiltinAllMode(unittest.TestCase):
+    """``load_from_builtin(disable_filters=True)`` must keep every entry."""
+
+    SAMPLE_FEED = [
+        # An entry that would be filtered out by the defaults (low uptime).
+        {"host": "a.example.com", "port": 443,
+         "secret": "dd345afe9188a4e5a94dc706e1aa6cef",
+         "uptime": 10, "ping": 600, "country": "XX",
+         "addTime": 1},
+        # An entry that passes the defaults.
+        {"host": "b.example.com", "port": 443,
+         "secret": "4622e21b94d5bd296c4086f4e16297a8",
+         "uptime": 99, "ping": 80, "country": "DE",
+         "addTime": 9_999_999_999},
+    ]
+
+    def _fake_http_get(self, *a, **kw):
+        return json.dumps(self.SAMPLE_FEED)
+
+    def test_filtered_drops_low_quality(self):
+        with mock.patch.object(sources, "_http_get", side_effect=self._fake_http_get):
+            proxies, meta = sources.load_from_builtin()
+        self.assertEqual(meta["total"], 2)
+        self.assertEqual(meta["after_filter"], 1)
+        self.assertFalse(meta["filters_disabled"])
+        self.assertEqual(proxies[0].server, "b.example.com")
+
+    def test_all_mode_keeps_every_entry(self):
+        with mock.patch.object(sources, "_http_get", side_effect=self._fake_http_get):
+            proxies, meta = sources.load_from_builtin(disable_filters=True)
+        self.assertEqual(meta["total"], 2)
+        self.assertEqual(meta["after_filter"], 2)
+        self.assertTrue(meta["filters_disabled"])
+        self.assertEqual({p.server for p in proxies},
+                         {"a.example.com", "b.example.com"})
+
+
+class TestStartTestPrompt(unittest.TestCase):
+    """The pre-test confirmation must respect --yes and non-TTY stdin."""
+
+    def test_auto_yes_returns_true(self):
+        from mtpch.cli import _prompt_start_test
+        self.assertTrue(_prompt_start_test(auto_yes=True))
+
+    def test_non_tty_returns_true(self):
+        from mtpch.cli import _prompt_start_test
+        with mock.patch.object(sys.stdin, "isatty", return_value=False):
+            self.assertTrue(_prompt_start_test(auto_yes=False))
+
+
+class TestBannerIsMTPCH(unittest.TestCase):
+    """Regression guard for the banner bug where the art spelled MTHPH."""
+
+    def test_banner_does_not_contain_old_glyph_pattern(self):
+        from mtpch.cli import BANNER_EN
+        # The broken banner had these two tell-tale substrings; the new
+        # MTPCH art has neither.
+        self.assertNotIn("________  ______  __  __", BANNER_EN)
+        self.assertNotIn("/_/ /_/_/   /_/ /_/", BANNER_EN)
+
+    def test_banner_has_new_MTPCH_shape(self):
+        from mtpch.cli import BANNER_EN
+        # Distinctive fragments of the correct figlet-slant "MTPCH".
+        self.assertIn("_____________", BANNER_EN)
+        self.assertIn("/_  __/ __ \\/ ____/", BANNER_EN)
 
 
 if __name__ == "__main__":  # pragma: no cover

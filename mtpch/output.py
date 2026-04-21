@@ -41,8 +41,12 @@ def _summary(results: Iterable[VerifyResult]) -> dict:
     dead = [r for r in results if not r.alive]
     latencies = [r.latency_ms for r in alive if r.latency_ms is not None]
     avg = round(sum(latencies) / len(latencies), 2) if latencies else None
+    # ``utcnow()`` is deprecated in Python 3.12+; use a timezone-aware UTC
+    # timestamp and render it in the classic trailing-Z ISO-8601 form.
+    now_utc = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
+    generated_at = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
-        "generated_at": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": generated_at,
         "total": len(results),
         "alive": len(alive),
         "dead": len(dead),

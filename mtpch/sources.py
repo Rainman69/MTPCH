@@ -3,11 +3,11 @@
 Four kinds of sources are supported:
 
 * ``load_from_file(path)`` — read a local file of arbitrary format
-* ``load_from_url(url)``  — download a remote text blob (txt/json/html)
-* ``load_from_stdin()``   — pipe proxies into the tool
-* ``load_from_builtin()`` — use the curated upstream feed consumed by
-  the *Mtproto-Collector* Cloudflare Worker (``mtpro.xyz``) and apply
-  the same filter rules
+* ``load_from_url(url)``   — download a remote text blob (txt/json/html)
+* ``load_from_stdin()``    — pipe proxies into the tool
+* ``load_from_builtin()``  — pull from the built-in upstream feed that
+  MTPCH bundles; filters are optional and may be disabled entirely so
+  that the raw list is returned as-is
 """
 
 from __future__ import annotations
@@ -23,9 +23,9 @@ from . import parser as _parser
 from .verifier import ProxyInfo
 
 # ---------------------------------------------------------------------------
-# Curated feed details — mirrors the configuration of the Mtproto-Collector
-# Cloudflare Worker so users of this tool receive the exact same upstream
-# proxy list the collector channel is built on.
+# Built-in feed — MTPCH ships with a ready-to-use upstream proxy source so
+# users do not need to find their own list.  The exact URL is an
+# implementation detail; treat it as an opaque feed.
 # ---------------------------------------------------------------------------
 
 BUILTIN_FEED_URL = "https://mtpro.xyz/api/?type=mtprotoS"
@@ -34,13 +34,14 @@ BUILTIN_FEED_HEADERS = {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
     ),
-    "Referer": "https://mtpro.xyz/mtproto",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# Default filters equivalent to ``filter.json`` shipped with the
-# collector Worker.  ``None`` means "do not filter on that field".
+# Default quality filters applied to the built-in feed.  ``None`` means
+# "do not filter on that field".  Pass ``filter_rules={}`` to keep the
+# defaults, or ``disable_filters=True`` to fetch every entry with no
+# quality gating whatsoever.
 DEFAULT_FILTER = {
     "uptime": 95,          # proxy uptime ≥ 95 (%)
     "ping_max": 150,        # proxy ping ≤ 150 ms
@@ -56,8 +57,17 @@ DEFAULT_FILTER = {
 # ---------------------------------------------------------------------------
 
 
+_DEFAULT_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+)
+
+
 def _http_get(url: str, *, headers: Optional[dict] = None, timeout: float = 15.0) -> str:
-    req = urllib.request.Request(url, headers=headers or {})
+    hdrs = {"User-Agent": _DEFAULT_UA}
+    if headers:
+        hdrs.update(headers)
+    req = urllib.request.Request(url, headers=hdrs)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         encoding = resp.headers.get_content_charset() or "utf-8"
         return resp.read().decode(encoding, errors="replace")
@@ -105,16 +115,34 @@ def load_from_stdin() -> Tuple[List[ProxyInfo], int]:
 def load_from_builtin(
     *,
     filter_rules: Optional[dict] = None,
+    disable_filters: bool = False,
     timeout: float = 15.0,
 ) -> Tuple[List[ProxyInfo], dict]:
-    """Download the curated feed and apply filter rules.
+    """Download the built-in feed and (optionally) apply filter rules.
+
+    Parameters
+    ----------
+    filter_rules:
+        Overrides merged on top of :data:`DEFAULT_FILTER`.  Ignored
+        entirely when ``disable_filters`` is ``True``.
+    disable_filters:
+        When ``True``, every entry the feed returns is kept and returned
+        in its original order — no uptime, ping, country, age or
+        sorting rule is applied.  Useful when the caller wants to
+        inspect / test the complete upstream list themselves.
+    timeout:
+        HTTP request timeout in seconds.
 
     Returns ``(proxies, meta)`` where ``meta`` contains ``total``,
-    ``after_filter`` and ``feed`` for reporting.
+    ``after_filter`` and ``feed`` for reporting.  When filters are
+    disabled, ``after_filter`` equals ``total``.
     """
-    rules = dict(DEFAULT_FILTER)
-    if filter_rules:
-        rules.update(filter_rules)
+    if disable_filters:
+        rules: dict = {}
+    else:
+        rules = dict(DEFAULT_FILTER)
+        if filter_rules:
+            rules.update(filter_rules)
 
     body = _http_get(BUILTIN_FEED_URL, headers=BUILTIN_FEED_HEADERS, timeout=timeout)
     try:
@@ -128,7 +156,7 @@ def load_from_builtin(
         )
 
     total = len(data)
-    filtered_raw = _apply_filter(data, rules)
+    filtered_raw = data if disable_filters else _apply_filter(data, rules)
     proxies: List[ProxyInfo] = []
     for entry in filtered_raw:
         try:
@@ -141,6 +169,7 @@ def load_from_builtin(
         "total": total,
         "after_filter": len(proxies),
         "rules": rules,
+        "filters_disabled": disable_filters,
     }
     return proxies, meta
 

@@ -10,7 +10,8 @@ the wild:
   separators
 * Arbitrary free-form text containing any of the above (regex scan)
 * JSON arrays/objects exposing ``host``/``server``, ``port`` and
-  ``secret`` keys — matches the Mtproto-Collector schema
+  ``secret`` keys — compatible with the common feed schema used by
+  public MTProto proxy aggregators
 
 All helpers return lists of :class:`~mtpch.verifier.ProxyInfo`
 instances and silently skip malformed entries (the caller gets a
@@ -98,7 +99,7 @@ def parse_triplet(text: str) -> ProxyInfo:
 
 
 # ---------------------------------------------------------------------------
-# JSON handling (Mtproto-Collector style & friends)
+# JSON handling (common aggregator feed schema & friends)
 # ---------------------------------------------------------------------------
 
 

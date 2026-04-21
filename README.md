@@ -5,11 +5,11 @@
 > just whether the TCP port is open.
 
 ```
-        __  ___  ________  ______  __  __
-       /  |/  / /_  __/ / / / __ \/ / / /
-      / /|_/ /   / / / /_/ / /_/ / /_/ /
-     / /  / /   / / / __  / ____/ __  /
-    /_/  /_/   /_/ /_/ /_/_/   /_/ /_/
+        __  _____________  ________  __
+       /  |/  /_  __/ __ \/ ____/ / / /
+      / /|_/ / / / / /_/ / /   / /_/ /
+     / /  / / / / / ____/ /___/ __  /
+    /_/  /_/ /_/ /_/    \____/_/ /_/
 ```
 
 MTPCH performs the **full obfuscated MTProto handshake** through each
@@ -55,10 +55,11 @@ is recorded.
 | tg:// and https://t.me/proxy links          | ✔ |
 | Raw `host:port:secret` triplets             | ✔ |
 | Free-form text scanning (mixed formats)     | ✔ |
-| JSON input (objects / arrays / collector)   | ✔ |
+| JSON input (objects / arrays / feed schemas)| ✔ |
 | Local files, remote URLs, stdin, inline     | ✔ |
-| Built-in curated feed (same backend as the  | ✔ |
-| &nbsp;&nbsp;*Mtproto-Collector* project)    | |
+| Built-in upstream proxy feed                | ✔ |
+| &nbsp;&nbsp;— filtered *or* raw "all" mode  | ✔ |
+| VPN-aware pause between fetch & test        | ✔ |
 | Text / JSON / links-list output             | ✔ |
 | Beautiful terminal UI (rich tables & bars)  | ✔ |
 | Bilingual, interactive menu for newcomers   | ✔ |
@@ -82,11 +83,18 @@ and macOS.
 
 ### Quick start
 
-Test the curated feed (same upstream source used by the
-*Mtproto-Collector* Cloudflare Worker):
+Test the built-in feed (a ready-to-use upstream proxy source shipped
+with MTPCH, quality filters applied by default):
 
 ```bash
 python3 mtpch.py --builtin
+```
+
+Test **every** entry the built-in feed returns, without applying any
+quality filter:
+
+```bash
+python3 mtpch.py --builtin-all
 ```
 
 Test your own list:
@@ -155,6 +163,29 @@ the `ee`/`dd` prefix byte) **or** as URL-safe Base64. Fake-TLS
 secrets with their trailing camouflage domain are fully supported;
 MTPCH will recover and display the camouflage hostname.
 
+### VPN-aware two-phase run
+
+MTPCH runs in **two stages**:
+
+1. **Fetch** — download / parse the proxy list.
+2. **Verify** — perform the real MTProto handshake through each proxy.
+
+Between the two, MTPCH pauses and asks you to confirm. This is
+intentional: on restricted networks (for example inside Iran) you may
+need a VPN to reach the upstream source in stage 1, but for stage 2
+you usually want to turn the VPN **off** so the test measures the
+real reachability from your actual network.
+
+Typical flow:
+
+```text
+[fetch]    → got 523 proxies
+[confirm]  → "turn off VPN, then press Enter"
+[verify]   → runs the MTProto handshake through each proxy
+```
+
+Use `--yes` (or `--no-pause`) to skip the confirmation in CI / scripts.
+
 ### Command-line reference
 
 ```
@@ -164,7 +195,9 @@ Input sources
   -f, --file   FILE       Path to a file (repeatable).
   -u, --url    URL        HTTP(S) URL to download (repeatable).
   --stdin                 Read proxies from standard input.
-  --builtin               Use the curated upstream feed.
+  --builtin               Use the built-in upstream feed (filters on).
+  --builtin-all           Use the built-in feed with NO filters —
+                          every proxy the upstream returns.
 
 Testing options
   -t, --timeout    SECS   Per-proxy socket timeout. Default: 8.0.
@@ -172,7 +205,7 @@ Testing options
   --dc             N      Telegram DC id to request. Default: 2.
   --retries        N      Extra retries per proxy on failure. Default: 1.
 
-Built-in feed filters
+Built-in feed filters (ignored with --builtin-all)
   --feed-min-uptime N     Minimum uptime percentage.
   --feed-max-ping   N     Maximum reported ping (ms).
   --feed-country    CODE  Restrict to a country code (repeatable).
@@ -188,6 +221,8 @@ Output options
 Misc
   --lang en|fa|both       Language of the help banner.
   --menu                  Force the interactive menu.
+  --yes, --no-pause       Skip the VPN-aware confirmation prompt shown
+                          between the fetch and test stages (CI mode).
   --version               Show version and exit.
 ```
 
@@ -203,6 +238,14 @@ python3 mtpch.py --builtin \
     --feed-country DE --feed-country NL \
     --feed-min-uptime 98 \
     --feed-max-age-hours 6
+```
+
+Full built-in feed, no quality filters at all, 64 workers, CI mode
+(no interactive pause):
+
+```bash
+python3 mtpch.py --builtin-all --concurrency 64 --yes \
+    --json all.json --links-out all-alive.txt
 ```
 
 Aggressive timeout, 64 workers:
@@ -250,6 +293,28 @@ You can read the implementation in
 python3 -m unittest discover -s tests -v
 ```
 
+### Changelog
+
+**v1.1.0**
+
+- Fixed the ASCII banner — the artwork now actually spells `MTPCH`
+  (previously it read as `MTHPH`).
+- Added `--builtin-all`: test every proxy the built-in feed returns
+  with **no** quality filters applied (menu option 2).
+- Added an explicit **two-phase run** — the tool now pauses between
+  fetching the proxy list and starting the real connectivity test,
+  asking for confirmation. This lets users on restricted networks
+  (e.g. Iran) turn a VPN on for the fetch stage and off for the test
+  stage so the verification reflects real-world reachability. The
+  pause can be skipped with `--yes` / `--no-pause` in CI.
+- Switched the verification loop to `as_completed` so fast proxies
+  show up in the live table immediately instead of waiting for
+  slower ones earlier in the input list.
+- Hardened `cryptography` import (clear error message if missing)
+  and fixed a deprecated `datetime.utcnow()` call for Python 3.12+.
+- Docs / help text no longer name the upstream source; it is
+  documented as the "built-in feed".
+
 ### License
 
 MIT — see [LICENSE](LICENSE).
@@ -287,8 +352,16 @@ MIT — see [LICENSE](LICENSE).
 - پشتیبانی از همه فرمت‌ها: `tg://proxy?...`, `https://t.me/proxy?...`,
   `host:port:secret`, JSON
 - ورودی از فایل، لینک اینترنتی، stdin، یا تایپ مستقیم
-- **منبع داخلی:** همون backend که پروژه‌ی *Mtproto-Collector* استفاده
-  می‌کنه — با همون فیلترها
+- **منبع داخلی:** MTPCH یک backendِ دریافتِ پراکسی از پیش‌آماده دارد،
+  با دو حالت: (۱) **فیلترشده** (پیش‌فرض) برای گرفتنِ فقط پراکسی‌های
+  باکیفیت، و (۲) **all / بدون فیلتر** (`--builtin-all`) که تمام
+  پراکسی‌هایی که backend برمی‌گرداند را بدون هیچ فیلتری می‌دهد.
+- **مکثِ بین دو مرحله (مخصوصِ ایران):** بین مرحله‌ی دریافتِ لیست و
+  اجرای تست، ابزار از شما می‌پرسد که آیا آماده‌ی شروعِ تست هستید یا
+  نه. این کار به شما اجازه می‌دهد اگر برای دریافتِ لیست ناچار به
+  روشن کردنِ VPN بوده‌اید، **قبل از شروعِ تست VPN را خاموش کنید** تا
+  نتیجه، واقعیتِ اتصالِ شما بدون VPN را نشان دهد (با `--yes` این مکث
+  حذف می‌شود).
 - خروجی متنی، JSON، و لیستِ لینکِ آماده برای پیست تو تلگرام
 - UIِ رنگی و خوانا با جدول و پروگرِس‌بار
 - منویِ تعاملی برای کسایی که با خط فرمان راحت نیستن
@@ -315,8 +388,11 @@ python3 mtpch.py
 یا مستقیم:
 
 ```bash
-# استفاده از منبعِ داخلی (آپدیتِ زنده از mtpro.xyz)
+# استفاده از منبعِ داخلی (با فیلترهای پیش‌فرضِ باکیفیت)
 python3 mtpch.py --builtin
+
+# استفاده از منبعِ داخلی بدونِ هیچ فیلتر — همه‌ی پراکسی‌ها
+python3 mtpch.py --builtin-all
 
 # فایلِ خودت
 python3 mtpch.py -f my_proxies.txt
@@ -326,6 +402,9 @@ python3 mtpch.py -u https://example.com/proxies.txt
 
 # یه پراکسیِ تکی
 python3 mtpch.py "tg://proxy?server=1.2.3.4&port=443&secret=ee..."
+
+# حالت CI — پرشِ خودکار از مکثِ VPN
+python3 mtpch.py --builtin-all --yes --json report.json
 ```
 
 ### ذخیره‌ی نتیجه
@@ -369,6 +448,13 @@ python3 mtpch.py --builtin \
     --feed-max-age-hours 6
 ```
 
+اگر می‌خواهید هیچ فیلتری اعمال نشود و **تمامِ** پراکسی‌هایی که
+backend برمی‌گرداند تست شود:
+
+```bash
+python3 mtpch.py --builtin-all
+```
+
 ### خطاها چی می‌گن؟
 
 وقتی یه پراکسی رد می‌شه، تو گزارش دقیقاً می‌بینی کجا گیر کرد:
@@ -395,6 +481,22 @@ python3 mtpch.py --builtin \
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+### تغییرات — نسخه ۱٫۱٫۰
+
+- **رفعِ باگِ بنر:** طرحِ ASCII که قبلاً `MTHPH` خوانده می‌شد اصلاح شد و
+  حالا واقعاً `MTPCH` را نشان می‌دهد.
+- **گزینه‌ی `--builtin-all`:** تستِ همه‌ی پراکسی‌هایی که backend
+  برمی‌گرداند، بدون اعمالِ هیچ‌گونه فیلترِ کیفیت (گزینه‌ی ۲ در منو).
+- **مکث بین دو مرحله:** حالا بعد از دریافتِ لیست و قبل از شروعِ تست،
+  ابزار از شما تأیید می‌خواهد تا فرصتِ خاموش/روشن کردنِ VPN را داشته
+  باشید. در ایران و سایر شبکه‌های محدود، معمولاً برای گرفتنِ لیست
+  نیاز به VPN دارید ولی برای تست باید VPN خاموش باشد تا نتیجه
+  واقعی باشد. با `--yes` این مکث حذف می‌شود.
+- اجرای تست به `as_completed` منتقل شد تا پراکسی‌های سریع بلافاصله
+  در جدولِ زنده ظاهر شوند و منتظرِ پراکسی‌های کند نمانند.
+- پیغامِ خطای واضح‌تر برای نبودِ پکیجِ `cryptography` و رفعِ هشدارِ
+  `datetime.utcnow()` در پایتون ۳٫۱۲+.
 
 ### لایسنس
 

@@ -29,29 +29,27 @@ import random
 import socket
 import struct
 import time
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Minimal AES-256-CTR implementation backed by ``cryptography`` when available
 # with a pure-python fallback so the tool has no hard C-extension requirement.
 # ---------------------------------------------------------------------------
 
-try:  # Preferred: fast C-backed primitives.
+try:
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+except ImportError as _crypto_import_err:  # pragma: no cover - env dependent
+    raise ImportError(
+        "MTPCH requires the 'cryptography' package for AES-256-CTR "
+        "primitives. Install it with:  pip install cryptography"
+    ) from _crypto_import_err
 
-    def _aes_ctr_stream(key: bytes, iv: bytes):
-        cipher = Cipher(algorithms.AES(key), modes.CTR(iv))
-        enc = cipher.encryptor()
-        return lambda data: enc.update(data)
 
-except Exception:  # pragma: no cover - executed only without cryptography
-    # Pure-Python fallback. Slow but functional.
-    from .pyaes import AESModeOfOperationCTR, Counter  # type: ignore
-
-    def _aes_ctr_stream(key: bytes, iv: bytes):
-        counter = Counter(initial_value=int.from_bytes(iv, "big"))
-        cipher = AESModeOfOperationCTR(key, counter=counter)
-        return cipher.encrypt
+def _aes_ctr_stream(key: bytes, iv: bytes):
+    """Return a streaming AES-256-CTR encrypt/decrypt callable."""
+    cipher = Cipher(algorithms.AES(key), modes.CTR(iv))
+    enc = cipher.encryptor()
+    return lambda data: enc.update(data)
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +180,9 @@ _PROTOCOL_TAG = 0xDDDDDDDD
 _DEFAULT_DC_ID = 2
 
 
-def _build_obfuscated_init(secret16: bytes, dc_id: int) -> Tuple[bytes, callable, callable]:
+def _build_obfuscated_init(
+    secret16: bytes, dc_id: int
+) -> Tuple[bytes, Callable[[bytes], bytes], Callable[[bytes], bytes]]:
     """Create the 64-byte obfuscated init frame.
 
     Returns ``(init_frame_to_send, encrypt, decrypt)`` where ``encrypt``

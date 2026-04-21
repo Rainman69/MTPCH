@@ -62,11 +62,11 @@ except Exception:  # pragma: no cover - exercised in stripped envs
 
 
 BANNER_EN = r"""
-        __  ___  ________  ______  __  __
-       /  |/  / /_  __/ / / / __ \/ / / /
-      / /|_/ /   / / / /_/ / /_/ / /_/ / 
-     / /  / /   / / / __  / ____/ __  /  
-    /_/  /_/   /_/ /_/ /_/_/   /_/ /_/   
+        __  _____________  ________  __
+       /  |/  /_  __/ __ \/ ____/ / / /
+      / /|_/ / / / / /_/ / /   / /_/ /
+     / /  / / / / / ____/ /___/ __  /
+    /_/  /_/ /_/ /_/    \____/_/ /_/
 """
 
 TAGLINE_EN = (
@@ -130,8 +130,12 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("--stdin", action="store_true",
                      help="Read proxies from standard input")
     src.add_argument("--builtin", action="store_true",
-                     help="Use the curated upstream feed (same backend as the "
-                          "Mtproto-Collector project)")
+                     help="Use the built-in upstream proxy feed (quality "
+                          "filters applied by default)")
+    src.add_argument("--builtin-all", action="store_true",
+                     help="Use the built-in upstream feed but return every "
+                          "proxy it lists without applying any quality "
+                          "filter (implies --builtin)")
     src.add_argument("proxy", nargs="*",
                      help="One or more inline proxies (tg://, https://t.me/proxy?…, "
                           "or host:port:secret triplets)")
@@ -173,6 +177,10 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Language of the help banner (default: both)")
     menu.add_argument("--menu", action="store_true",
                       help="Force the interactive menu even when flags are present")
+    menu.add_argument("--yes", "--no-pause", dest="auto_yes", action="store_true",
+                      help="Skip the 'start the test?' confirmation shown "
+                           "between fetching proxies and running the checks. "
+                           "Useful for CI / non-interactive runs.")
 
     return p
 
@@ -205,9 +213,9 @@ MTProto اجرا می‌شود و از DC تلگرام پاسخِ resPQ گرفت
 برخلاف ابزارهای ساده که فقط پورت را پینگ می‌کنند، این‌جا اتصالِ واقعی
 سنجیده می‌شود.
 
-از منوی زیر یک منبع (فایل، لینک، یا منبع داخلیِ هم‌خانواده با
-Mtproto-Collector) را انتخاب کنید؛ در پایان می‌توانید گزارش را به
-صورت JSON، متنِ خوانا، یا لیست لینکِ آماده‌ی استفاده ذخیره کنید.
+از منوی زیر یک منبع (فایل، لینک، یا منبع داخلی) را انتخاب کنید؛ در
+پایان می‌توانید گزارش را به صورت JSON، متنِ خوانا، یا لیست لینکِ
+آماده‌ی استفاده ذخیره کنید.
 """
 
 
@@ -234,48 +242,56 @@ def _menu() -> Optional[argparse.Namespace]:
     """
     _show_help("both")
     console.print()
-    console.print("  [bold]1[/bold]) Test the built-in curated feed  "
-                  "[dim](Mtproto-Collector backend)[/dim]"
-                  if _HAS_RICH else "  1) Built-in curated feed")
-    console.print("  [bold]2[/bold]) Test a local file" if _HAS_RICH
-                  else "  2) Local file")
-    console.print("  [bold]3[/bold]) Test a remote URL" if _HAS_RICH
-                  else "  3) Remote URL")
-    console.print("  [bold]4[/bold]) Paste proxies manually" if _HAS_RICH
-                  else "  4) Paste manually")
-    console.print("  [bold]5[/bold]) Show help again" if _HAS_RICH
-                  else "  5) Show help")
+    console.print("  [bold]1[/bold]) Built-in feed  [dim](recommended filters: "
+                  "good uptime, low ping, fresh)[/dim]"
+                  if _HAS_RICH else "  1) Built-in feed (recommended filters)")
+    console.print("  [bold]2[/bold]) Built-in feed  [dim](ALL proxies — no "
+                  "filters applied)[/dim]"
+                  if _HAS_RICH else "  2) Built-in feed (all proxies, no filters)")
+    console.print("  [bold]3[/bold]) Test a local file" if _HAS_RICH
+                  else "  3) Local file")
+    console.print("  [bold]4[/bold]) Test a remote URL" if _HAS_RICH
+                  else "  4) Remote URL")
+    console.print("  [bold]5[/bold]) Paste proxies manually" if _HAS_RICH
+                  else "  5) Paste manually")
+    console.print("  [bold]6[/bold]) Show help again" if _HAS_RICH
+                  else "  6) Show help")
     console.print("  [bold]q[/bold]) Quit" if _HAS_RICH else "  q) Quit")
 
     ns = argparse.Namespace(
-        file=[], url=[], stdin=False, builtin=False, proxy=[],
+        file=[], url=[], stdin=False, builtin=False, builtin_all=False, proxy=[],
         timeout=8.0, concurrency=32, dc=2, retries=1,
         feed_min_uptime=None, feed_max_ping=None, feed_country=[],
         feed_max_age_hours=None,
         json_out=None, text_out=None, links_out=None,
         no_color=False, quiet=False, lang="both", menu=False,
+        auto_yes=False,
     )
 
     while True:
-        choice = console.input("\n  Choose [1-5/q]: ").strip().lower()
+        choice = console.input("\n  Choose [1-6/q]: ").strip().lower()
         if choice in ("q", "quit", "exit"):
             return None
         if choice == "1":
             ns.builtin = True
             break
         if choice == "2":
+            ns.builtin = True
+            ns.builtin_all = True
+            break
+        if choice == "3":
             path = console.input("  Path to the file: ").strip()
             if not path:
                 continue
             ns.file.append(path)
             break
-        if choice == "3":
+        if choice == "4":
             url = console.input("  Full URL (http/https): ").strip()
             if not url:
                 continue
             ns.url.append(url)
             break
-        if choice == "4":
+        if choice == "5":
             console.print("  Paste one proxy per line. End with an empty line:")
             buf: list[str] = []
             while True:
@@ -286,7 +302,7 @@ def _menu() -> Optional[argparse.Namespace]:
             if buf:
                 ns.proxy = buf
                 break
-        if choice == "5":
+        if choice == "6":
             _show_help("both")
             continue
 
@@ -341,23 +357,34 @@ def _collect_proxies(args) -> List[ProxyInfo]:
                 seen.add(key)
                 collected.append(p)
 
-    if args.builtin:
+    if args.builtin or getattr(args, "builtin_all", False):
+        disable = bool(getattr(args, "builtin_all", False))
         filter_rules: dict = {}
-        if args.feed_min_uptime is not None:
-            filter_rules["uptime"] = args.feed_min_uptime
-        if args.feed_max_ping is not None:
-            filter_rules["ping_max"] = args.feed_max_ping
-        if args.feed_country:
-            filter_rules["countries"] = [c.upper() for c in args.feed_country]
-        if args.feed_max_age_hours is not None:
-            filter_rules["max_age_hours"] = args.feed_max_age_hours
+        if not disable:
+            if args.feed_min_uptime is not None:
+                filter_rules["uptime"] = args.feed_min_uptime
+            if args.feed_max_ping is not None:
+                filter_rules["ping_max"] = args.feed_max_ping
+            if args.feed_country:
+                filter_rules["countries"] = [c.upper() for c in args.feed_country]
+            if args.feed_max_age_hours is not None:
+                filter_rules["max_age_hours"] = args.feed_max_age_hours
 
-        proxies, meta = _sources.load_from_builtin(filter_rules=filter_rules or None)
-        _add(proxies)
-        reports.append(
-            f"built-in feed: {meta['after_filter']} proxies after filter "
-            f"(from {meta['total']} upstream)"
+        proxies, meta = _sources.load_from_builtin(
+            filter_rules=filter_rules or None,
+            disable_filters=disable,
         )
+        _add(proxies)
+        if disable:
+            reports.append(
+                f"built-in feed: {meta['after_filter']} proxies "
+                f"(all entries, no filter)"
+            )
+        else:
+            reports.append(
+                f"built-in feed: {meta['after_filter']} proxies after filter "
+                f"(from {meta['total']} upstream)"
+            )
 
     for path in args.file:
         try:
@@ -421,6 +448,71 @@ def _info(msg: str) -> None:
         console.print(f". {msg}")
 
 
+# ---------------------------------------------------------------------------
+# VPN / start-test confirmation
+# ---------------------------------------------------------------------------
+
+_CONFIRM_EN = (
+    "Proxies have been fetched.\n"
+    "Before the real connectivity test starts, make sure your "
+    "internet connection reflects how you actually use Telegram:\n"
+    "  •  If you had to enable a VPN to reach the proxy feed (e.g. "
+    "because of ISP restrictions), turn it OFF now so that the test "
+    "measures real-world reachability from your network.\n"
+    "  •  If your normal Telegram usage is already direct, leave the "
+    "network as it is."
+)
+
+_CONFIRM_FA = (
+    "لیستِ پراکسی‌ها دریافت شد.\n"
+    "قبل از اینکه تست واقعیِ اتصال شروع شود، وضعیتِ اینترنت خود را "
+    "بررسی کنید:\n"
+    "  •  اگر برای گرفتنِ این لیست ناچار به روشن کردنِ VPN بوده‌اید "
+    "(مثلاً به‌خاطر محدودیت‌های ISP در ایران)، الان VPN را خاموش "
+    "کنید تا تست، واقعیتِ اتصالِ شما به تلگرام را نشان دهد.\n"
+    "  •  اگر به صورتِ عادی بدون VPN از تلگرام استفاده می‌کنید، "
+    "همان وضعیت را نگه دارید."
+)
+
+
+def _prompt_start_test(auto_yes: bool) -> bool:
+    """Ask the user whether to begin the verification phase.
+
+    Returns ``True`` to continue, ``False`` to abort the run.  When
+    ``auto_yes`` is true, or when stdin is not a TTY (pipelines /
+    CI), the prompt is skipped and the function returns ``True`` so
+    the tool keeps behaving well in non-interactive environments.
+    """
+    if auto_yes:
+        return True
+    if not sys.stdin.isatty():
+        return True
+
+    if _HAS_RICH:
+        console.print(Panel.fit(_CONFIRM_EN, title="Ready to test (EN)",
+                                border_style="yellow"))
+        console.print(Panel.fit(_CONFIRM_FA, title="آماده‌ی تست (FA)",
+                                border_style="magenta"))
+    else:
+        console.print(_CONFIRM_EN)
+        console.print()
+        console.print(_CONFIRM_FA)
+
+    while True:
+        try:
+            ans = console.input(
+                "\n  Start the connectivity test now? [Y/n] / "
+                "شروع تست؟ [Y/n]: "
+            ).strip().lower()
+        except EOFError:
+            return True
+        if ans in ("", "y", "yes", "بله", "ب"):
+            return True
+        if ans in ("n", "no", "خیر", "ن"):
+            return False
+        console.print("  Please answer Y or N.")
+
+
 def _verify_all(
     proxies: List[ProxyInfo],
     *,
@@ -458,13 +550,17 @@ def _verify_all(
         ) as progress:
             task = progress.add_task("Verifying proxies", total=len(proxies))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-                for res in ex.map(_run, proxies):
+                futures = [ex.submit(_run, p) for p in proxies]
+                for fut in concurrent.futures.as_completed(futures):
+                    res = fut.result()
                     results.append(res)
                     progress.advance(task)
                     _live_status(res)
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-            for res in ex.map(_run, proxies):
+            futures = [ex.submit(_run, p) for p in proxies]
+            for fut in concurrent.futures.as_completed(futures):
+                res = fut.result()
                 results.append(res)
                 if not quiet:
                     _live_status(res)
@@ -585,6 +681,10 @@ def run(args) -> int:
           f"(timeout={args.timeout}s, workers={args.concurrency})")
     console.print()
 
+    if not _prompt_start_test(getattr(args, "auto_yes", False)):
+        _warn("test aborted by user before verification started.")
+        return 0
+
     results = _verify_all(
         proxies,
         timeout=args.timeout,
@@ -622,6 +722,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         and not args.url
         and not args.stdin
         and not args.builtin
+        and not getattr(args, "builtin_all", False)
         and not args.proxy
     )
     if args.menu or no_source:
