@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.log
+*.tmp
+.DS_Store
+build/
+dist/
+*.bak
+# Report outputs (don't commit test runs)
+report.json
+report.txt
+live.txt

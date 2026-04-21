@@ -1,0 +1,14 @@
+# Example proxy list accepted by MTPCH — comments and blank lines are
+# ignored. You can mix any of the formats shown below in a single file.
+
+# 1. Telegram deep-link (tg://)
+tg://proxy?server=89.144.48.197&port=443&secret=dd345afe9188a4e5a94dc706e1aa6cef
+
+# 2. Shareable web link
+https://t.me/proxy?server=2.26.86.172&port=443&secret=4622e21b94d5bd296c4086f4e16297a8
+
+# 3. Bare host:port:secret triplet (any of : ; , | or spaces work)
+anarchy.click:443:ee7118c792a6da15636cc9753bf90cfc2d62726f777365722e79616e6465782e636f6d
+
+# 4. Free-form text — the parser will find every link automatically:
+# > "Grab this one quickly: <tg://proxy?server=1.2.3.4&port=443&secret=ee...>"
