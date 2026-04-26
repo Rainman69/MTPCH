@@ -106,7 +106,7 @@ python3 mtpch.py -f my_proxies.txt
 Test a remote list:
 
 ```bash
-python3 mtpch.py -u [https://example.com/mtproxies.txt](https://raw.githubusercontent.com/kort0881/telegram-proxy-collector/main/proxy_all.txt)
+python3 mtpch.py -u https://raw.githubusercontent.com/kort0881/telegram-proxy-collector/main/proxy_all.txt
 ```
 
 Pipe proxies in:
