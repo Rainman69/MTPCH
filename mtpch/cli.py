@@ -34,7 +34,6 @@ try:
         TextColumn,
         TimeElapsedColumn,
     )
-    from rich.table import Table
     from rich.text import Text
 
     _HAS_RICH = True
@@ -595,38 +594,25 @@ def _live_status(res: VerifyResult) -> None:
 
 
 def _render_table(results: List[VerifyResult]) -> None:
-    if not _HAS_RICH:
-        return
+    """One full https link per line — copy-paste safe for Telegram."""
     alive = sorted(
         (r for r in results if r.alive),
         key=lambda r: r.latency_ms or 1e9,
     )
     if not alive:
         return
-
-    table = Table(
-        title="Working proxies (sorted by latency)",
-        header_style="bold cyan",
-        title_style="bold green",
-        show_lines=False,
-    )
-    table.add_column("#", justify="right", style="dim")
-    table.add_column("Server", overflow="fold")
-    table.add_column("Port", justify="right")
-    table.add_column("Type", justify="center")
-    table.add_column("RTT", justify="right")
-    table.add_column("Link", overflow="fold", style="green")
-
-    for i, r in enumerate(alive, 1):
-        table.add_row(
-            str(i),
-            r.proxy.server,
-            str(r.proxy.port),
-            r.proxy.secret_kind,
-            f"{r.latency_ms:.1f} ms" if r.latency_ms is not None else "-",
-            r.proxy.link_https,
+    if _HAS_RICH:
+        console.print(
+            f"\n[bold green]Working proxies[/bold green] "
+            f"[dim]({len(alive)}, one link per line — copy/paste ready)[/dim]"
         )
-    console.print(table)
+        for r in alive:
+            # soft_wrap keeps the full URL intact (no mid-secret wrap)
+            console.print(r.proxy.link_https, style="green", soft_wrap=True)
+    else:
+        console.print(f"\nWorking proxies ({len(alive)}, one link per line)")
+        for r in alive:
+            console.print(r.proxy.link_https)
 
 
 def _render_summary(results: List[VerifyResult]) -> None:
