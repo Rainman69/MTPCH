@@ -61,7 +61,8 @@ is recorded.
 | &nbsp;&nbsp;— filtered *or* raw "all" mode  | ✔ |
 | VPN-aware pause between fetch & test        | ✔ |
 | Text / JSON / links-list output             | ✔ |
-| Beautiful terminal UI (rich tables & bars)  | ✔ |
+| Beautiful terminal UI (rich panels & bars)  | ✔ |
+| Working proxies as one full link per line   | ✔ |  (Telegram copy/paste safe)
 | Bilingual, interactive menu for newcomers   | ✔ |
 | Parallel testing with configurable workers  | ✔ |
 | Proper exit codes for CI / shell scripts    | ✔ |
@@ -310,6 +311,9 @@ python3 -m unittest discover -s tests -v
   the key material.
 - Dedup keys use decoded secret bytes; average RTT no longer skips
   a legitimate `0.0` latency.
+- Working proxies are printed as one full `https://t.me/proxy?...`
+  link per line (no Rich table wrapping) so you can copy-paste into
+  Telegram cleanly.
 
 **v1.1.0**
 
@@ -506,6 +510,7 @@ python3 -m unittest discover -s tests -v
 - فیلترهای منبع داخلی: تبدیلِ امنِ عددهای رشته‌ای و مقایسهٔ بدونِ حساسیت به حروف کشور.
 - secretهای Fake-TLS (`ee`): ردِ صریح با stage=`unsupported` به‌جای نتیجهٔ مردهٔ گمراه‌کننده.
 - secretهای `dd` با بایتِ اضافه دیگر پیشوند را داخل کلید نگه نمی‌دارند.
+- نمایش پراکسی‌های سالم به‌صورت یک لینک کامل در هر خط (مناسب کپی در تلگرام، بدون جدول شکسته).
 
 ### تغییرات — نسخه ۱٫۱٫۰
 
