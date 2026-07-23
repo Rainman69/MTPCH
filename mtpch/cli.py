@@ -352,7 +352,7 @@ def _collect_proxies(args) -> List[ProxyInfo]:
 
     def _add(proxies: List[ProxyInfo]):
         for p in proxies:
-            key = (p.server.lower(), p.port, p.raw_secret.lower())
+            key = (p.server.lower(), p.port, p.secret)
             if key not in seen:
                 seen.add(key)
                 collected.append(p)
@@ -642,9 +642,8 @@ def _render_summary(results: List[VerifyResult]) -> None:
             f"[bold]Success rate:[/bold] {pct:0.1f}%\n"
         )
         if alive:
-            avg = sum(r.latency_ms for r in alive if r.latency_ms) / max(
-                sum(1 for r in alive if r.latency_ms), 1
-            )
+            latencies = [r.latency_ms for r in alive if r.latency_ms is not None]
+            avg = (sum(latencies) / len(latencies)) if latencies else 0.0
             panel += f"[bold]Average RTT:[/bold] {avg:0.1f} ms"
         console.print(Panel.fit(panel, title="Summary", border_style="green"))
     else:

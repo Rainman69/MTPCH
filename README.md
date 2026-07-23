@@ -295,6 +295,22 @@ python3 -m unittest discover -s tests -v
 
 ### Changelog
 
+**v1.1.1**
+
+- Fixed socket FD leak on TCP connect failure (high concurrency).
+- Strip trailing punctuation from free-form proxy links so chat logs
+  no longer corrupt secrets (e.g. `…secret=ab12.`).
+- Preserve `+` in standard base64 secrets (`parse_qs` no longer
+  turns them into spaces).
+- Built-in feed filters: coerce string metrics, case-insensitive
+  country codes.
+- Fake-TLS (`ee`) secrets: refuse early with stage `unsupported`
+  instead of silent false-dead results (plain/dd only for now).
+- `dd` secrets with trailing junk no longer keep `0xDD` as part of
+  the key material.
+- Dedup keys use decoded secret bytes; average RTT no longer skips
+  a legitimate `0.0` latency.
+
 **v1.1.0**
 
 - Fixed the ASCII banner — the artwork now actually spells `MTPCH`
@@ -481,6 +497,15 @@ python3 mtpch.py --builtin-all
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+### تغییرات — نسخه ۱٫۱٫۱
+
+- رفع نشتِ سوکت هنگام شکستِ TCP connect.
+- حذف علائم نگارشیِ انتهای لینک در متن آزاد (مثل نقطهٔ بعد از secret).
+- حفظ کاراکتر `+` در secretهای base64 استاندارد.
+- فیلترهای منبع داخلی: تبدیلِ امنِ عددهای رشته‌ای و مقایسهٔ بدونِ حساسیت به حروف کشور.
+- secretهای Fake-TLS (`ee`): ردِ صریح با stage=`unsupported` به‌جای نتیجهٔ مردهٔ گمراه‌کننده.
+- secretهای `dd` با بایتِ اضافه دیگر پیشوند را داخل کلید نگه نمی‌دارند.
 
 ### تغییرات — نسخه ۱٫۱٫۰
 

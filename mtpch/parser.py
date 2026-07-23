@@ -5,7 +5,7 @@ the wild:
 
 * ``tg://proxy?server=...&port=...&secret=...``
 * ``https://t.me/proxy?server=...&port=...&secret=...``
-* ``https://telegram.me/proxy?...`` and ``proxy.me/...`` variants
+* ``https://telegram.me/proxy?...``
 * Bare ``host:port:secret`` triplets, with `:` or `;` or whitespace as
   separators
 * Arbitrary free-form text containing any of the above (regex scan)
@@ -23,13 +23,15 @@ from __future__ import annotations
 import json
 import re
 from typing import Iterable, List, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import unquote, urlparse
 
 from .verifier import ProxyInfo, decode_secret
 
 
 # A tolerant regex that matches both ``tg://proxy?...`` and the various
 # ``https://t.me/proxy?...`` / ``https://telegram.me/proxy?...`` links.
+# Trailing sentence punctuation is stripped after the match so chat logs
+# like ``…secret=ab12.`` do not poison the secret.
 _PROXY_LINK_RE = re.compile(
     r"""
     (?:tg://proxy\?|https?://(?:t|telegram)\.me/proxy\?)
@@ -37,6 +39,9 @@ _PROXY_LINK_RE = re.compile(
     """,
     re.VERBOSE,
 )
+# Trailing sentence / markdown punctuation stuck to free-form links.
+# `]` must be escaped or placed first so it does not close the class early.
+_TRAILING_PUNCT_RE = re.compile(r"[.,;:!?)>}\]]+$")
 
 # ``host:port:secret`` triplet (host may be a hostname or IPv4).
 _TRIPLET_RE = re.compile(
@@ -72,11 +77,36 @@ def _build(server: str, port: str | int, secret: str, source_line: str) -> Proxy
 # ---------------------------------------------------------------------------
 
 
+def _parse_query(query: str) -> dict:
+    """Parse a query string without treating ``+`` as space.
+
+    ``urllib.parse.parse_qs`` / ``parse_qsl`` convert ``+`` to `` ``, which
+    corrupts standard (non-URL-safe) base64 secrets that contain ``+``.
+    """
+    out: dict = {}
+    if not query:
+        return out
+    for part in query.split("&"):
+        if not part:
+            continue
+        if "=" in part:
+            k, v = part.split("=", 1)
+        else:
+            k, v = part, ""
+        out.setdefault(unquote(k), []).append(unquote(v))
+    return out
+
+
+def _sanitize_link(link: str) -> str:
+    link = link.strip().strip("<>\"'`")
+    return _TRAILING_PUNCT_RE.sub("", link)
+
+
 def parse_link(link: str) -> ProxyInfo:
     """Parse a single ``tg://`` or ``https://t.me/proxy?`` link."""
-    link = link.strip().strip("<>\"'`")
+    link = _sanitize_link(link)
     parsed = urlparse(link)
-    qs = parse_qs(parsed.query)
+    qs = _parse_query(parsed.query)
     try:
         server = qs["server"][0]
         port = qs["port"][0]
@@ -161,7 +191,7 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
     removed while preserving order.
     """
     results: List[ProxyInfo] = []
-    seen: set[Tuple[str, int, str]] = set()
+    seen: set[Tuple[str, int, bytes]] = set()
 
     # Short-circuit: if the whole blob is valid JSON treat it as such
     # and skip the regex pass; that avoids re-parsing literal strings
@@ -171,7 +201,7 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
         try:
             json_proxies = parse_json(stripped)
             for p in json_proxies:
-                key = (p.server.lower(), p.port, p.raw_secret.lower())
+                key = (p.server.lower(), p.port, p.secret)
                 if key not in seen:
                     seen.add(key)
                     results.append(p)
@@ -182,12 +212,13 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
 
     # Link patterns first so we preserve full raw_secret.
     for match in _PROXY_LINK_RE.finditer(text):
-        raw_link = match.group(0)
+        raw_link = _sanitize_link(match.group(0))
         try:
             p = parse_link(raw_link)
         except Exception:
             continue
-        key = (p.server.lower(), p.port, p.raw_secret.lower())
+        # Dedup on decoded secret bytes so base64 case variants collide correctly.
+        key = (p.server.lower(), p.port, p.secret)
         if key not in seen:
             seen.add(key)
             results.append(p)
@@ -208,7 +239,7 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
             p = parse_triplet(match.group(0))
         except Exception:
             continue
-        key = (p.server.lower(), p.port, p.raw_secret.lower())
+        key = (p.server.lower(), p.port, p.secret)
         if key not in seen:
             seen.add(key)
             results.append(p)
@@ -225,7 +256,7 @@ def extract_many(sources: Iterable[str]) -> Tuple[List[ProxyInfo], int]:
     a single line).  Callers use it purely for reporting.
     """
     collected: List[ProxyInfo] = []
-    seen: set[Tuple[str, int, str]] = set()
+    seen: set[Tuple[str, int, bytes]] = set()
     skipped = 0
 
     for blob in sources:
@@ -237,7 +268,7 @@ def extract_many(sources: Iterable[str]) -> Tuple[List[ProxyInfo], int]:
                 skipped += 1
             continue
         for p in proxies:
-            key = (p.server.lower(), p.port, p.raw_secret.lower())
+            key = (p.server.lower(), p.port, p.secret)
             if key not in seen:
                 seen.add(key)
                 collected.append(p)

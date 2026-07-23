@@ -87,7 +87,7 @@ class VerifyResult:
     proxy: ProxyInfo
     alive: bool
     latency_ms: Optional[float]
-    stage: str  # last stage reached: dns / connect / handshake / telegram / ok
+    stage: str  # last stage: dns / connect / handshake / telegram / ok / unsupported
     error: Optional[str] = None
     fake_tls_domain: Optional[str] = None
     dc_id: Optional[int] = None
@@ -135,7 +135,8 @@ def decode_secret(secret: str) -> Tuple[bytes, str, Optional[str]]:
         except Exception:
             fake_tls_domain = None
         raw = raw[1:17]
-    elif len(raw) == 17 and raw[0] == 0xDD:
+    elif len(raw) >= 17 and raw[0] == 0xDD:
+        # Accept dd + 16-byte key (+ optional trailing junk); keep only the key.
         kind = "dd"
         raw = raw[1:17]
     elif len(raw) == 16:
@@ -284,6 +285,21 @@ def verify_proxy(
     The function never raises; transient network failures are reported
     through :class:`VerifyResult`.
     """
+    # Fake-TLS (ee) secrets wrap the obfuscated stream in a TLS-looking
+    # ClientHello. Speaking plain obfuscated transport against them only
+    # produces systematic false negatives, so refuse early with a clear stage.
+    if proxy.secret_kind == "ee":
+        return VerifyResult(
+            proxy,
+            False,
+            None,
+            "unsupported",
+            "Fake-TLS (ee) secrets are not supported yet "
+            "(plain/dd obfuscated transport only)",
+            fake_tls_domain=proxy_fake_tls_domain(proxy),
+            dc_id=dc_id,
+        )
+
     start = time.monotonic()
     stage = "dns"
     try:
@@ -299,20 +315,21 @@ def verify_proxy(
         family, socktype, sproto, _, sockaddr = addr_info[0]
 
         stage = "connect"
-        sock = socket.socket(family, socktype, sproto)
-        sock.settimeout(timeout)
-        try:
-            sock.connect(sockaddr)
-        except (ConnectionRefusedError, OSError) as exc:
-            return VerifyResult(
-                proxy,
-                False,
-                None,
-                stage,
-                f"TCP connect failed: {exc.__class__.__name__}: {exc}",
-            )
+        # ``with`` always closes the FD — including connect failures — so
+        # parallel scans cannot leak sockets under high concurrency.
+        with socket.socket(family, socktype, sproto) as sock:
+            sock.settimeout(timeout)
+            try:
+                sock.connect(sockaddr)
+            except (ConnectionRefusedError, OSError) as exc:
+                return VerifyResult(
+                    proxy,
+                    False,
+                    None,
+                    stage,
+                    f"TCP connect failed: {exc.__class__.__name__}: {exc}",
+                )
 
-        with sock:
             sock.settimeout(timeout)
             stage = "handshake"
             init_frame, encrypt, decrypt = _build_obfuscated_init(
@@ -357,17 +374,16 @@ def verify_proxy(
             length_bytes = decrypt(length_ct)
             (total_len,) = struct.unpack("<I", length_bytes)
 
-            # Transport-error shortcut: a 4-byte negative integer means
-            # the proxy/DC rejected us (e.g. DC-id wrong).
+            # Intermediate MSB = quick-ack; some proxies also surface
+            # signed 4-byte transport errors with the high bit set.
             if total_len & 0x80000000:
-                # Quick-ACK flag (MSB).  Not expected for our unencrypted
-                # request — treat as failure but keep the error useful.
+                err_code = struct.unpack("<i", length_bytes)[0]
                 return VerifyResult(
                     proxy,
                     False,
                     None,
                     stage,
-                    "unexpected quick-ack flag in reply",
+                    f"transport error / quick-ack ({err_code})",
                 )
 
             if total_len < 8 or total_len > 1 << 20:

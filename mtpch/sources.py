@@ -177,24 +177,37 @@ def load_from_builtin(
 def _apply_filter(entries: list, rules: dict) -> list:
     now = int(time.time())
 
+    def _num(value):
+        if value is None:
+            return None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        try:
+            return float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
     def keep(entry: dict) -> bool:
-        uptime = entry.get("uptime")
-        if rules.get("uptime") is not None and uptime is not None:
-            if uptime < rules["uptime"]:
+        uptime = _num(entry.get("uptime"))
+        min_uptime = rules.get("uptime")
+        if min_uptime is not None and uptime is not None:
+            if uptime < min_uptime:
                 return False
 
-        ping = entry.get("ping")
+        ping = _num(entry.get("ping"))
         if ping is not None:
             if rules.get("ping_max") is not None and ping > rules["ping_max"]:
                 return False
             if rules.get("ping_min") is not None and ping < rules["ping_min"]:
                 return False
 
-        countries = rules.get("countries") or []
-        if countries and entry.get("country") not in countries:
-            return False
+        countries = {c.upper() for c in (rules.get("countries") or []) if c}
+        if countries:
+            country = entry.get("country")
+            if country is None or str(country).upper() not in countries:
+                return False
 
-        add_time = entry.get("addTime")
+        add_time = _num(entry.get("addTime"))
         max_age = rules.get("max_age_hours")
         if max_age is not None and add_time is not None:
             if now - add_time > max_age * 3600:
@@ -206,7 +219,9 @@ def _apply_filter(entries: list, rules: dict) -> list:
 
     if rules.get("newest_first"):
         filtered.sort(
-            key=lambda e: e.get("updateTime") or e.get("addTime") or 0,
+            key=lambda e: _num(e.get("updateTime"))
+            or _num(e.get("addTime"))
+            or 0,
             reverse=True,
         )
     return filtered
