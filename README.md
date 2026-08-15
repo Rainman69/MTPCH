@@ -1,8 +1,7 @@
 # MTPCH — MTProto Proxy Checker
 
-> A cross-platform, no-nonsense tool that tells you whether a Telegram
-> MTProto proxy **really** connects you to the Telegram network — not
-> just whether the TCP port is open.
+> Tells you whether a Telegram MTProto proxy **really** connects you to
+> Telegram — not just whether the TCP port is open.
 
 ```
         __  _____________  ________  __
@@ -12,11 +11,14 @@
     /_/  /_/ /_/ /_/    \____/_/ /_/
 ```
 
-MTPCH performs the **full obfuscated MTProto handshake** through each
-proxy, asks a real Telegram datacenter for a handshake reply
-(`req_pq_multi` → `resPQ`), and only reports a proxy as *alive* when
-Telegram genuinely answers. Pings and port scanners cannot do that;
-MTPCH can.
+MTPCH performs the **full obfuscated MTProto handshake** through each proxy,
+asks a real Telegram datacenter for a handshake reply (`req_pq_multi` →
+`resPQ`), and reports a proxy as alive only when Telegram genuinely answers.
+Pings and port scanners cannot do that.
+
+Supports all three transports — plain, `dd` (secure), and `ee` (Fake-TLS) —
+and ships with built-in proxy sources, so `python3 mtpch.py --builtin` works
+with no list to find and no arguments to learn.
 
 - [English guide](#english-guide)
 - [راهنمای فارسی](#راهنمای-فارسی)
@@ -25,59 +27,78 @@ MTPCH can.
 
 ## English guide
 
+**Contents** · [Why](#why-mtpch) · [Install](#installation) ·
+[Quick start](#quick-start) · [Reading the output](#reading-the-output) ·
+[Why a proxy failed](#why-a-proxy-failed) · [Formats](#supported-proxy-formats) ·
+[CLI reference](#command-line-reference) · [Python API](#use-it-as-a-library) ·
+[How it works](#how-it-works-technical) · [Changelog](#changelog)
+
 ### Why MTPCH?
 
-Most “proxy checkers” you will find online send a single TCP SYN packet
-to `host:port` and call it a day. That tells you the port is open,
-nothing more. A broken, fake, or ISP-intercepted proxy will happily
-pass those checks.
+Most “proxy checkers” send a single TCP SYN to `host:port` and call it a day.
+That tells you the port is open, nothing more — a broken, fake, or
+ISP-intercepted proxy passes that check happily.
 
 MTPCH does the real thing:
 
 1. Opens a TCP socket to the proxy.
-2. Negotiates the **obfuscated MTProto transport** exactly the way an
-   official Telegram client does (random 64-byte init, AES-256-CTR with
-   the proxy secret, padded intermediate transport).
-3. Sends an unencrypted `req_pq_multi` MTProto message through the
-   tunnel.
-4. Waits for a decrypted `resPQ` reply with the right constructor ID
-   (`0x05162463`) and our client nonce echoed back.
+2. Negotiates the **obfuscated MTProto transport** exactly as an official
+   Telegram client does (random 64-byte init, AES-256-CTR keyed with the proxy
+   secret, padded-intermediate transport). For `ee` secrets it first completes
+   a **Fake-TLS handshake** and authenticates the proxy by its HMAC digest.
+3. Sends an unencrypted `req_pq_multi` MTProto message through the tunnel.
+4. Waits for a `resPQ` reply with the right constructor ID (`0x05162463`) and
+   our own client nonce echoed back.
 
-If all four steps succeed, you truly have a working MTProto path to a
-Telegram datacenter. Any other outcome, with a precise explanation,
-is recorded.
+Only a real Telegram datacenter can produce that reply. Anything else is
+recorded with the exact stage it failed at.
+
+| | Port scanner | MTPCH |
+|---|---|---|
+| Port is open | ✔ | ✔ |
+| Proxy secret is correct | ✘ | ✔ |
+| Traffic actually reaches Telegram | ✘ | ✔ |
+| Distinguishes wrong secret from dead host | ✘ | ✔ |
+| Real latency through the tunnel | ✘ | ✔ |
 
 ### Features
 
-| Feature                                     | Details |
-| ------------------------------------------- | ------- |
-| Real MTProto handshake, not a ping          | ✔ |
-| **All three transports: plain, `dd`, `ee`** | ✔ |
-| &nbsp;&nbsp;— Fake-TLS (`ee`) verification  | ✔ |  (HMAC-authenticated ClientHello/ServerHello) |
-| tg:// and https://t.me/proxy links          | ✔ |
-| Raw `host:port:secret` triplets             | ✔ |
-| Free-form text scanning (mixed formats)     | ✔ |
-| JSON input (objects / arrays / feed schemas)| ✔ |
-| Local files, remote URLs, stdin, inline     | ✔ |
-| **Built-in sources — no path needed**        | ✔  four auto-updating GitHub lists + mtpro.xyz |
-| &nbsp;&nbsp;— filtered *or* raw "all" mode  | ✔ |
-| VPN-aware pause between fetch & test        | ✔ |
-| Text / JSON / links-list output             | ✔ |
-| Beautiful terminal UI (rich panels & bars)  | ✔ |
-| Working proxies as one full link per line   | ✔ |  (Telegram copy/paste safe)
-| Per-transport success counters in summary   | ✔ |
-| Bilingual, interactive menu for newcomers   | ✔ |
-| Parallel testing with configurable workers  | ✔ |
-| Proper exit codes for CI / shell scripts    | ✔ |
-| 100 % Python, cross-platform                | ✔ |
+**Verification**
+
+- Real MTProto handshake, not a ping
+- All three transports: plain, `dd`, and `ee` (Fake-TLS, HMAC-authenticated)
+- A wrong `ee` secret is reported as `faketls`, never as a false “dead”
+- Per-proxy latency and a precise failure stage
+- Configurable timeout, workers, retries, and target DC
+
+**Input**
+
+- Built-in sources — four auto-updating GitHub lists plus mtpro.xyz, no path
+  needed; filtered or raw `--builtin-all` mode
+- Local files, remote URLs, stdin, or inline arguments
+- `tg://`, `t.me/proxy`, `host:port:secret`, JSON, or free-form text
+- Hex **or** Base64 secrets, with or without the `dd`/`ee` prefix
+
+**Output**
+
+- Live table, per-transport counters, summary panel
+- JSON, text, and links-only reports
+- Working proxies as one full link per line (Telegram copy-paste safe)
+- Proper exit codes for CI, `--quiet` and `--no-color` for scripts
+
+**Practical**
+
+- VPN-aware pause between fetching and testing
+- Bilingual interactive menu for newcomers
+- Pure Python, cross-platform, three dependencies
 
 ### Supported secret kinds
 
 | Prefix | Transport | Notes |
 |--------|-----------|-------|
-| *(none)* | obfuscated, padded-intermediate | 16-byte secret |
-| `dd` | obfuscated, padded-intermediate | "secure" mode |
-| `ee` | **Fake-TLS** + obfuscated | secret carries a camouflage domain; the proxy is authenticated by an HMAC-SHA256 digest in the TLS `random` field, so a wrong secret is reported as `faketls`, never as a false "dead" |
+| *(none)* | obfuscated, padded-intermediate | plain 16-byte secret |
+| `dd` | obfuscated, padded-intermediate | “secure” mode |
+| `ee` | **Fake-TLS** + obfuscated | Secret carries a camouflage domain, used as the SNI in a real TLS-shaped handshake. The proxy is authenticated by an HMAC-SHA256 digest in the TLS `random` field, so a wrong secret is reported as `faketls` rather than a misleading “dead”. |
 
 ### Installation
 
@@ -87,62 +108,88 @@ cd MTPCH
 pip install -r requirements.txt
 ```
 
-Python 3.8 or newer is required. The only runtime dependencies are
-[`rich`](https://pypi.org/project/rich/) for the terminal UI and
-[`cryptography`](https://pypi.org/project/cryptography/) for fast
-AES-256-CTR. Both are pure-Python wheels available on Windows, Linux
-and macOS.
+Python 3.8+. Three dependencies, all pure-Python wheels on Windows, Linux and
+macOS: [`rich`](https://pypi.org/project/rich/) for the terminal UI,
+[`cryptography`](https://pypi.org/project/cryptography/) for fast AES-256-CTR,
+and [`certifi`](https://pypi.org/project/certifi/) for CA certificates
+(python.org builds don't use the system keychain).
 
 ### Quick start
 
-Test the built-in sources — MTPCH ships with several auto-updating
-GitHub proxy lists plus mtpro.xyz, so you do not have to supply a feed
-or a file (quality filters apply to mtpro entries only):
+Nothing to configure — the built-in sources mean you don't need a proxy list:
 
 ```bash
 python3 mtpch.py --builtin
 ```
 
-Test **every** entry the built-in sources return, with no quality
-filtering at all:
-
-```bash
-python3 mtpch.py --builtin-all
-```
-
-Test your own list:
-
-```bash
-python3 mtpch.py -f my_proxies.txt
-```
-
-Test a remote list:
-
-```bash
-python3 mtpch.py -u https://raw.githubusercontent.com/kort0881/telegram-proxy-collector/main/proxy_all.txt
-```
-
-Pipe proxies in:
-
-```bash
-cat list.txt | python3 mtpch.py --stdin
-```
-
-Test a single proxy from the command line:
-
-```bash
-python3 mtpch.py "tg://proxy?server=1.2.3.4&port=443&secret=ee..."
-```
-
-Start the **interactive menu** (just run the tool with no arguments):
+Or run with no arguments at all for the **interactive menu**:
 
 ```bash
 python3 mtpch.py
 ```
 
-### Saving results
+| Goal | Command |
+|------|---------|
+| Built-in sources, quality-filtered | `python3 mtpch.py --builtin` |
+| Built-in sources, everything, no filters | `python3 mtpch.py --builtin-all` |
+| Your own file | `python3 mtpch.py -f my_proxies.txt` |
+| A remote list | `python3 mtpch.py -u https://example.com/list.txt` |
+| Piped in | `cat list.txt \| python3 mtpch.py --stdin` |
+| One proxy | `python3 mtpch.py "tg://proxy?server=1.2.3.4&port=443&secret=ee…"` |
+| Unattended / CI | `python3 mtpch.py --builtin --yes --quiet --json out.json` |
 
-Write any combination of the three report formats:
+Two sample files are included if you just want to see the output shape:
+[`samples/proxies.txt`](samples/proxies.txt) and
+[`samples/proxies.json`](samples/proxies.json).
+
+### Reading the output
+
+```text
+· gh:Argh94/Proxy-List: 227
+· gh:kort0881/telegram-proxy-collector: 196
+!   mtpro.xyz: TimeoutError: The read operation timed out
+· built-in sources: 451 proxies from 4/5 sources
+· about to verify 451 unique proxies (timeout=8.0s, workers=32)
+
+  ✓   82.4 ms  1.2.3.4:443  plain
+  ✓  147.1 ms  proxy.example.com:8443  ee
+  ✗ faketls    bad.example.com:443  digest mismatch (wrong secret)
+  ✗ connect    5.6.7.8:443  TCP connect failed: timed out
+
+╭────────── Summary ──────────╮
+│ Total:  451                 │
+│ Alive:  214                 │
+│ Dead :  237                 │
+│ Success rate: 47.4%         │
+│ By secret: plain:71/121 …   │
+╰─────────────────────────────╯
+```
+
+Every source reports its own count, and a failed source is a warning (`!`)
+rather than a fatal error — one dead upstream never stops the run.
+
+`By secret` is worth watching: it breaks the success rate down per transport,
+which is how you notice that (for instance) public `ee` proxies die far faster
+than `dd` ones.
+
+### Why a proxy failed
+
+The stage tells you exactly how far it got, which separates “wrong secret”
+from “host is gone”:
+
+| Stage | Meaning |
+|-------|---------|
+| `dns` | Hostname does not resolve. |
+| `connect` | TCP never connected — firewall, closed port, or dead host. |
+| `faketls` | `ee` only: the TLS-shaped handshake failed or the server's HMAC digest didn't match. Almost always a wrong secret, or not really a Fake-TLS proxy. |
+| `handshake` | The 64-byte obfuscated init could not be sent. |
+| `telegram` | Proxy connected, but Telegram behind it never answered correctly — wrong secret, broken proxy, or unreachable DC. |
+| `ok` | Alive and usable. |
+
+Exit codes: `0` at least one proxy alive · `1` nothing to test ·
+`2` input error · `3` everything failed.
+
+### Saving results
 
 ```bash
 python3 mtpch.py --builtin \
@@ -152,10 +199,10 @@ python3 mtpch.py --builtin \
 ```
 
 - `--json` — full structured report, ideal for automation.
-- `--text` — nicely formatted text report with every proxy, ready-to
-  paste links, reasons for failures, latencies.
-- `--links-out` — plain list of working `https://t.me/proxy?...` links,
-  one per line, ready to import into Telegram.
+- `--text` — formatted text report: every proxy, ready-to-paste links,
+  failure reasons, latencies.
+- `--links-out` — bare list of working `https://t.me/proxy?...` links, one per
+  line, ready to import into Telegram.
 
 ### Supported proxy formats
 
@@ -171,35 +218,31 @@ MTPCH auto-detects every common MTProto proxy format:
 | JSON array of any mix of the above |
 | Free-form text containing any of the above (Markdown, HTML, chat logs) |
 
-Secrets can be supplied either in hexadecimal form (with or without
-the `ee`/`dd` prefix byte) **or** as URL-safe Base64. Fake-TLS
-secrets with their trailing camouflage domain are fully supported:
-MTPCH recovers the camouflage hostname, uses it as the SNI in a real
-Fake-TLS handshake, and authenticates the proxy by verifying its
-HMAC-SHA256 digest before speaking MTProto through the tunnel.
+Secrets can be hexadecimal (with or without the `ee`/`dd` prefix byte) **or**
+URL-safe Base64. Fake-TLS secrets keep their trailing camouflage domain: MTPCH
+recovers that hostname, uses it as the SNI in a real Fake-TLS handshake, and
+authenticates the proxy by verifying its HMAC-SHA256 digest before speaking
+MTProto through the tunnel.
 
 ### VPN-aware two-phase run
 
 MTPCH runs in **two stages**:
 
-1. **Fetch** — download / parse the proxy list.
+1. **Fetch** — download and parse the proxy list.
 2. **Verify** — perform the real MTProto handshake through each proxy.
 
-Between the two, MTPCH pauses and asks you to confirm. This is
-intentional: on restricted networks (for example inside Iran) you may
-need a VPN to reach the upstream source in stage 1, but for stage 2
-you usually want to turn the VPN **off** so the test measures the
-real reachability from your actual network.
-
-Typical flow:
+Between them MTPCH pauses and asks you to confirm. This is deliberate: on a
+restricted network (Iran, for instance) you may need a VPN to reach the
+upstream sources in stage 1, but you want it **off** for stage 2 so the test
+measures reachability from your actual connection.
 
 ```text
-[fetch]    → got 523 proxies
+[fetch]    → got 451 proxies
 [confirm]  → "turn off VPN, then press Enter"
 [verify]   → runs the MTProto handshake through each proxy
 ```
 
-Use `--yes` (or `--no-pause`) to skip the confirmation in CI / scripts.
+Use `--yes` (or `--no-pause`) to skip the prompt in CI and scripts.
 
 ### Command-line reference
 
@@ -246,7 +289,11 @@ nothing to test, `2` on input error, `3` if everything failed.
 
 ### Filtering examples
 
-Only German & Dutch proxies, up-time ≥ 98 %, last seen within 6 hours:
+The `--feed-*` filters apply to mtpro.xyz entries, which are the only ones
+carrying uptime/ping/country metadata. GitHub lists are plain proxy lists with
+no metadata to filter on, so they always come through in full.
+
+Only German and Dutch proxies, uptime ≥ 98 %, seen within the last 6 hours:
 
 ```bash
 python3 mtpch.py --builtin \
@@ -255,26 +302,51 @@ python3 mtpch.py --builtin \
     --feed-max-age-hours 6
 ```
 
-All built-in sources, no quality filters, 64 workers, CI mode
-(no interactive pause):
+Everything, no quality filters, 64 workers, unattended:
 
 ```bash
 python3 mtpch.py --builtin-all --concurrency 64 --yes \
     --json all.json --links-out all-alive.txt
 ```
 
-Aggressive timeout, 64 workers:
+Aggressive timeout on your own list:
 
 ```bash
 python3 mtpch.py -f list.txt --timeout 4 --concurrency 64
 ```
 
+### Use it as a library
+
+The CLI is a thin wrapper — the pieces are importable:
+
+```python
+from mtpch.parser import extract_from_text
+from mtpch.verifier import verify_proxy
+from mtpch.sources import load_from_builtin
+
+# parse anything: links, triplets, JSON, or free-form text
+proxies = extract_from_text(open("list.txt").read())
+
+# or pull the built-in sources (returns proxies + a per-source report)
+proxies, meta = load_from_builtin(disable_filters=True)
+print(f"{len(proxies)} proxies from {meta['sources_ok']}/{meta['source_count']} sources")
+
+for p in proxies[:5]:
+    r = verify_proxy(p, timeout=8.0)
+    detail = f"{r.latency_ms:.0f}ms" if r.alive else r.error
+    print(p.server, p.port, p.secret_kind, "→", r.stage, detail)
+```
+
+`verify_proxy` returns a `VerifyResult` with `alive`, `stage`, `latency_ms`,
+`error`, `fake_tls_domain` and `dc_id`. It never raises on network failure — a
+dead proxy is a result, not an exception.
+
 ### Is it safe? Does it sign me in?
 
-No. MTPCH never sends your phone number, never logs in, never touches
-`auth_key` generation. The handshake stops at step 1 of Telegram’s
-login flow — exactly the minimum needed to **prove** that the proxy
-forwards traffic to a genuine Telegram datacenter.
+No. MTPCH never sends your phone number, never logs in, and never touches
+`auth_key` generation. The handshake stops at step 1 of Telegram's login
+flow — exactly the minimum needed to **prove** the proxy forwards traffic to a
+genuine Telegram datacenter.
 
 ### How it works (technical)
 
@@ -300,13 +372,37 @@ MTPCH follows that document to the letter:
   echo.
 
 You can read the implementation in
-[`mtpch/verifier.py`](mtpch/verifier.py).
+[`mtpch/verifier.py`](mtpch/verifier.py), and the Fake-TLS layer in
+[`mtpch/faketls.py`](mtpch/faketls.py).
+
+**Project layout**
+
+```
+mtpch/verifier.py   obfuscated transport, resPQ validation
+mtpch/faketls.py    ee: ClientHello digest, ServerHello check, record layer
+mtpch/parser.py     links, triplets, JSON, free-form text
+mtpch/sources.py    built-in GitHub lists + mtpro, files, URLs, stdin
+mtpch/output.py     JSON / text / links reports
+mtpch/cli.py        argument parsing, interactive menu, live table
+```
 
 ### Running the tests
 
 ```bash
+python3 -m pytest tests/ -q          # or:
 python3 -m unittest discover -s tests -v
 ```
+
+54 tests, no external network needed — the handshake runs end to end against
+an in-process fake MTProxy on a loopback socket that speaks the real
+obfuscated and Fake-TLS protocols, including negative cases (wrong secret,
+corrupt digest, foreign session id, silent peer, TLS alert).
+
+### Contributing
+
+Issues and pull requests welcome. Please keep the tests passing and add one
+for anything you fix — most of the suite exists because a real proxy behaved
+in a way the code didn't expect.
 
 ### Changelog
 
@@ -349,44 +445,33 @@ python3 -m unittest discover -s tests -v
   hosts whose first `getaddrinfo` family is unusable.
 - Summary panel reports per-transport counters (`plain:6/6 dd:7/7 ee:4/23`).
 
+<details>
+<summary><strong>v1.1.1</strong> and earlier</summary>
+
 **v1.1.1**
 
 - Fixed socket FD leak on TCP connect failure (high concurrency).
-- Strip trailing punctuation from free-form proxy links so chat logs
-  no longer corrupt secrets (e.g. `…secret=ab12.`).
-- Preserve `+` in standard base64 secrets (`parse_qs` no longer
-  turns them into spaces).
-- Built-in feed filters: coerce string metrics, case-insensitive
-  country codes.
-- Fake-TLS (`ee`) secrets: refuse early with stage `unsupported`
-  instead of silent false-dead results (plain/dd only for now).
-- `dd` secrets with trailing junk no longer keep `0xDD` as part of
-  the key material.
-- Dedup keys use decoded secret bytes; average RTT no longer skips
-  a legitimate `0.0` latency.
-- Working proxies are printed as one full `https://t.me/proxy?...`
-  link per line (no Rich table wrapping) so you can copy-paste into
-  Telegram cleanly.
+- Strip trailing punctuation from free-form links so chat logs no longer
+  corrupt secrets (e.g. `…secret=ab12.`).
+- Preserve `+` in standard base64 secrets (`parse_qs` turned them into spaces).
+- Feed filters: coerce string metrics, case-insensitive country codes.
+- `dd` secrets with trailing junk no longer keep `0xDD` in the key material.
+- Dedup keys use decoded secret bytes; average RTT no longer skips a
+  legitimate `0.0` latency.
+- Working proxies print as one full link per line so they paste into Telegram
+  cleanly.
 
 **v1.1.0**
 
-- Fixed the ASCII banner — the artwork now actually spells `MTPCH`
-  (previously it read as `MTHPH`).
-- Added `--builtin-all`: test every proxy the built-in feed returns
-  with **no** quality filters applied (menu option 2).
-- Added an explicit **two-phase run** — the tool now pauses between
-  fetching the proxy list and starting the real connectivity test,
-  asking for confirmation. This lets users on restricted networks
-  (e.g. Iran) turn a VPN on for the fetch stage and off for the test
-  stage so the verification reflects real-world reachability. The
-  pause can be skipped with `--yes` / `--no-pause` in CI.
-- Switched the verification loop to `as_completed` so fast proxies
-  show up in the live table immediately instead of waiting for
-  slower ones earlier in the input list.
-- Hardened `cryptography` import (clear error message if missing)
-  and fixed a deprecated `datetime.utcnow()` call for Python 3.12+.
-- Docs / help text no longer name the upstream source; it is
-  documented as the "built-in feed".
+- Fixed the ASCII banner — it read as `MTHPH`.
+- Added `--builtin-all` to skip all quality filters.
+- Added the two-phase run with a VPN pause between fetch and test.
+- Switched the verification loop to `as_completed` so fast proxies appear
+  immediately instead of waiting behind slow ones.
+- Clear error if `cryptography` is missing; fixed deprecated
+  `datetime.utcnow()` for Python 3.12+.
+
+</details>
 
 ### License
 
@@ -396,7 +481,12 @@ MIT — see [LICENSE](LICENSE).
 
 ## راهنمای فارسی
 
-### این ابزار چی کار می‌کنه؟
+**فهرست** · [معرفی](#معرفی) · [ویژگی‌ها](#ویژگیها) · [نصب](#نصب) ·
+[شروع سریع](#شروعِ-سریع) · [خواندن خروجی](#خواندن-خروجی) ·
+[معنی خطاها](#معنی-خطاها) · [فرمت‌ها](#فرمتهای-پشتیبانیشده) ·
+[امنیت](#امنیت) · [تغییرات](#تغییرات-نسخه-۱٫۳٫۰)
+
+### معرفی
 
 بیشتر ابزارهایی که ادعا می‌کنن «پراکسی MTProto رو تست می‌کنن»، فقط
 یه بسته‌ی TCP می‌فرستن به `host:port` و اگه پورت باز بود می‌گن «سالمه».
@@ -409,36 +499,56 @@ MIT — see [LICENSE](LICENSE).
 1. به پراکسی TCP می‌زنه.
 2. دقیقاً مثل کلاینتِ رسمیِ تلگرام، هندشِیکِ پوششی (Obfuscated
    Transport) رو انجام می‌ده — یعنی ۶۴ بایت اولیه‌ی تصادفی، رمزنگاری
-   AES-256-CTR با سِکرتِ پراکسی، ترنسپورتِ padded-intermediate.
+   AES-256-CTR با سِکرتِ پراکسی، ترنسپورتِ padded-intermediate. برای
+   سِکرت‌های `ee` اول هندشِیکِ **Fake-TLS** انجام می‌شه و پراکسی با
+   دایجستِ HMAC خودش احراز هویت می‌شه.
 3. یه پیامِ MTProto بدون رمز از نوع `req_pq_multi` از داخلِ تونل
    می‌فرسته.
 4. منتظرِ جوابِ `resPQ` از سمتِ DCِ تلگرام می‌مونه و چک می‌کنه که
    ConstructorID درست باشه (`0x05162463`) و Nonceِ خودمون برگشته باشه.
 
-اگر هر چهار مرحله موفق باشه، یعنی پراکسی واقعاً داره ترافیک رو به
-سرورهای تلگرام می‌رسونه. هر اتفاقِ دیگه‌ای با یه پیغامِ خطایِ دقیق
-گزارش می‌شه (مثلاً TCP رد شد، هندشِیک رد شد، تلگرام جواب نداد و ...).
+فقط یه DCِ واقعیِ تلگرام می‌تونه این جواب رو بده. هر نتیجه‌ی دیگه‌ای
+با مرحله‌ی دقیقِ شکست ثبت می‌شه.
+
+| | پورت‌اسکنر | MTPCH |
+|---|---|---|
+| پورت باز است | ✔ | ✔ |
+| سِکرت درست است | ✘ | ✔ |
+| ترافیک واقعاً به تلگرام می‌رسد | ✘ | ✔ |
+| تفاوتِ «سِکرت غلط» با «سرور مرده» | ✘ | ✔ |
+| پینگِ واقعی از داخلِ تونل | ✘ | ✔ |
 
 ### ویژگی‌ها
 
-- تستِ واقعیِ اتصال، نه پینگ ساده
-- پشتیبانی از همه فرمت‌ها: `tg://proxy?...`, `https://t.me/proxy?...`,
-  `host:port:secret`, JSON
-- ورودی از فایل، لینک اینترنتی، stdin، یا تایپ مستقیم
-- **منبع داخلی:** MTPCH یک backendِ دریافتِ پراکسی از پیش‌آماده دارد،
-  با دو حالت: (۱) **فیلترشده** (پیش‌فرض) برای گرفتنِ فقط پراکسی‌های
-  باکیفیت، و (۲) **all / بدون فیلتر** (`--builtin-all`) که تمام
-  پراکسی‌هایی که backend برمی‌گرداند را بدون هیچ فیلتری می‌دهد.
-- **مکثِ بین دو مرحله (مخصوصِ ایران):** بین مرحله‌ی دریافتِ لیست و
-  اجرای تست، ابزار از شما می‌پرسد که آیا آماده‌ی شروعِ تست هستید یا
-  نه. این کار به شما اجازه می‌دهد اگر برای دریافتِ لیست ناچار به
-  روشن کردنِ VPN بوده‌اید، **قبل از شروعِ تست VPN را خاموش کنید** تا
-  نتیجه، واقعیتِ اتصالِ شما بدون VPN را نشان دهد (با `--yes` این مکث
-  حذف می‌شود).
-- خروجی متنی، JSON، و لیستِ لینکِ آماده برای پیست تو تلگرام
-- UIِ رنگی و خوانا با جدول و پروگرِس‌بار
-- منویِ تعاملی برای کسایی که با خط فرمان راحت نیستن
-- کاملاً کراس‌پلتفرم (ویندوز، مک، لینوکس)
+**تست**
+
+- تستِ واقعیِ هندشِیک، نه پینگ ساده
+- هر سه ترنسپورت: plain، `dd`، و `ee` (Fake-TLS با احراز هویتِ HMAC)
+- سِکرتِ `ee` اشتباه به‌جای «مرده»ی گمراه‌کننده، `faketls` گزارش می‌شه
+- پینگِ هر پراکسی و مرحله‌ی دقیقِ شکست
+- تایم‌اوت، تعداد ورکر، ریترای و DC قابل تنظیم
+
+**ورودی**
+
+- **منبعِ داخلی — نیازی به دادنِ لیست نیست:** چهار مخزنِ گیت‌هاب که
+  خودکار آپدیت می‌شن به‌همراه mtpro.xyz، در دو حالتِ فیلترشده یا
+  کاملِ بدون فیلتر (`--builtin-all`)
+- فایل، لینکِ اینترنتی، stdin، یا تایپِ مستقیم
+- `tg://`، `t.me/proxy`، `host:port:secret`، JSON، یا متنِ آزاد
+- سِکرت به‌صورت Hex یا Base64، با یا بدون پیشوندِ `dd`/`ee`
+
+**خروجی**
+
+- جدولِ زنده، شمارشِ تفکیکیِ هر ترنسپورت، پنلِ خلاصه
+- گزارشِ JSON، متنی، و فقط-لینک
+- پراکسی‌های سالم، هر کدوم یه لینکِ کامل در یه خط (مناسبِ کپی در تلگرام)
+- کدِ خروجیِ درست برای CI، و `--quiet` و `--no-color` برای اسکریپت
+
+**عملی**
+
+- مکثِ آگاه‌به‌VPN بین دریافتِ لیست و شروعِ تست
+- منویِ تعاملیِ دوزبانه
+- کاملاً پایتون، کراس‌پلتفرم (ویندوز، مک، لینوکس)
 
 ### نصب
 
@@ -450,35 +560,60 @@ cd MTPCH
 pip install -r requirements.txt
 ```
 
+سه پکیج لازمه: `rich` برای UI، `cryptography` برای AES سریع، و `certifi`
+برای گواهی‌های CA (بیلدهای رسمیِ پایتون از keychainِ سیستم استفاده نمی‌کنن).
+
 ### شروعِ سریع
 
-اجرا بدون آرگومان تا منویِ تعاملی باز بشه:
+هیچ تنظیمی لازم نیست — منبعِ داخلی یعنی نیازی به پیدا کردنِ لیست نداری:
+
+```bash
+python3 mtpch.py --builtin
+```
+
+یا بدون هیچ آرگومان، برای منویِ تعاملی:
 
 ```bash
 python3 mtpch.py
 ```
 
-یا مستقیم:
+| کار | دستور |
+|-----|-------|
+| منبعِ داخلی، فیلترشده | `python3 mtpch.py --builtin` |
+| منبعِ داخلی، همه، بدون فیلتر | `python3 mtpch.py --builtin-all` |
+| فایلِ خودت | `python3 mtpch.py -f my_proxies.txt` |
+| لینکِ اینترنتی | `python3 mtpch.py -u https://example.com/list.txt` |
+| از stdin | `cat list.txt \| python3 mtpch.py --stdin` |
+| یه پراکسیِ تکی | `python3 mtpch.py "tg://proxy?server=1.2.3.4&port=443&secret=ee…"` |
+| حالتِ CI | `python3 mtpch.py --builtin --yes --quiet --json out.json` |
 
-```bash
-# استفاده از منبعِ داخلی (با فیلترهای پیش‌فرضِ باکیفیت)
-python3 mtpch.py --builtin
+دو فایلِ نمونه هم هست اگه فقط می‌خوای شکلِ خروجی رو ببینی:
+[`samples/proxies.txt`](samples/proxies.txt) و
+[`samples/proxies.json`](samples/proxies.json).
 
-# استفاده از منبعِ داخلی بدونِ هیچ فیلتر — همه‌ی پراکسی‌ها
-python3 mtpch.py --builtin-all
+### خواندن خروجی
 
-# فایلِ خودت
-python3 mtpch.py -f my_proxies.txt
+```text
+· gh:Argh94/Proxy-List: 227
+!   mtpro.xyz: TimeoutError: The read operation timed out
+· built-in sources: 451 proxies from 4/5 sources
 
-# یه لینکِ اینترنتی که لیست پراکسی داره
-python3 mtpch.py -u https://example.com/proxies.txt
+  ✓   82.4 ms  1.2.3.4:443  plain
+  ✗ faketls    bad.example.com:443  digest mismatch (wrong secret)
 
-# یه پراکسیِ تکی
-python3 mtpch.py "tg://proxy?server=1.2.3.4&port=443&secret=ee..."
-
-# حالت CI — پرشِ خودکار از مکثِ VPN
-python3 mtpch.py --builtin-all --yes --json report.json
+╭────────── Summary ──────────╮
+│ Total:  451                 │
+│ Alive:  214                 │
+│ Success rate: 47.4%         │
+│ By secret: plain:71/121 …   │
+╰─────────────────────────────╯
 ```
+
+هر منبع تعدادِ خودش رو گزارش می‌کنه و منبعِ خراب فقط یه هشدار (`!`) می‌ده —
+هیچ منبعی نمی‌تونه کلِ اجرا رو متوقف کنه.
+
+`By secret` رو حتماً ببین: نرخِ موفقیت رو تفکیکِ ترنسپورت نشون می‌ده، و
+همین‌جا می‌فهمی که مثلاً پراکسی‌های عمومیِ `ee` خیلی سریع‌تر از `dd` می‌میرن.
 
 ### ذخیره‌ی نتیجه
 
@@ -508,9 +643,15 @@ python3 mtpch.py --builtin \
 
 سِکرت می‌تونه Hex باشه (با یا بدون بایتِ پیشوندِ `ee`/`dd`) یا
 Base64. سِکرت‌های Fake-TLS که آخرشون دامنه‌ی پوشش داره هم کاملاً
-پشتیبانی می‌شن و دامنه‌ی پوشش تو گزارش نشون داده می‌شه.
+پشتیبانی می‌شن: MTPCH اون دامنه رو به‌عنوان SNI در هندشِیکِ واقعیِ
+Fake-TLS استفاده می‌کنه و پراکسی رو با دایجستِ HMAC-SHA256 خودش
+احراز هویت می‌کنه.
 
 ### فیلتر کردنِ منبع داخلی
+
+فیلترهای `--feed-*` فقط روی ورودی‌های mtpro.xyz اعمال می‌شن، چون تنها
+منبعی‌ست که متادیتای uptime/ping/country داره. لیست‌های گیت‌هاب متادیتا
+ندارن، پس همیشه کامل می‌آن.
 
 مثلاً فقط آلمان و هلند، با uptime بالای ۹۸٪ و حداکثر ۶ ساعت قدمت:
 
@@ -521,24 +662,28 @@ python3 mtpch.py --builtin \
     --feed-max-age-hours 6
 ```
 
-اگر می‌خواهید هیچ فیلتری اعمال نشود و **تمامِ** پراکسی‌هایی که
-backend برمی‌گرداند تست شود:
+اگر می‌خواهید هیچ فیلتری اعمال نشود و **تمامِ** پراکسی‌ها تست شوند:
 
 ```bash
 python3 mtpch.py --builtin-all
 ```
 
-### خطاها چی می‌گن؟
+### معنی خطاها
 
-وقتی یه پراکسی رد می‌شه، تو گزارش دقیقاً می‌بینی کجا گیر کرد:
+مرحله‌ی شکست دقیقاً می‌گه تا کجا رفته — و همین «سِکرتِ غلط» رو از
+«سرورِ مرده» جدا می‌کنه:
 
 | مرحله | یعنی چی؟ |
 | ----- | -------- |
 | `dns` | اسمِ سرور قابلِ resolve شدن نیست. |
 | `connect` | TCP اصلاً وصل نشد (فایروال/پورت بسته/سرور خاموش). |
+| `faketls` | فقط `ee`: هندشِیکِ Fake-TLS شکست خورد یا دایجستِ سرور جور نشد. تقریباً همیشه یعنی سِکرت غلطه، یا اصلاً پراکسیِ Fake-TLS نیست. |
 | `handshake` | ارسالِ ۶۴ بایتِ اولیه موفق نبود. |
 | `telegram` | پراکسی وصل شد، ولی تلگرام پشتش جواب درست نداد (سِکرت اشتباه، پراکسی خراب، یا DC در دسترس نیست). |
 | `ok` | سالم و قابل استفاده. |
+
+کدهای خروجی: `0` حداقل یه پراکسی سالم · `1` چیزی برای تست نبود ·
+`2` خطای ورودی · `3` همه شکست خوردن.
 
 ### امنیت
 
@@ -552,8 +697,12 @@ python3 mtpch.py --builtin-all
 تست‌های موجود رو خراب نکنید:
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m pytest tests/ -q
 ```
+
+۵۴ تست، بدون نیاز به اینترنت — هندشِیک به‌صورت کامل روی یه MTProxyِ
+جعلیِ درون‌پروسه تست می‌شه که پروتکلِ واقعیِ obfuscated و Fake-TLS رو
+حرف می‌زنه، همراه با حالت‌های منفی (سِکرت غلط، دایجستِ خراب، سرورِ ساکت).
 
 ### تغییرات — نسخه ۱٫۳٫۰
 
@@ -594,30 +743,27 @@ python3 -m unittest discover -s tests -v
 - پنلِ خلاصه، شمارشِ تفکیکی هر ترنسپورت را نشان می‌دهد
   (`plain:6/6 dd:7/7 ee:4/23`).
 
-### تغییرات — نسخه ۱٫۱٫۱
+<details>
+<summary><strong>نسخه ۱٫۱٫۱</strong> و قدیمی‌تر</summary>
+
+**نسخه ۱٫۱٫۱**
 
 - رفع نشتِ سوکت هنگام شکستِ TCP connect.
 - حذف علائم نگارشیِ انتهای لینک در متن آزاد (مثل نقطهٔ بعد از secret).
 - حفظ کاراکتر `+` در secretهای base64 استاندارد.
-- فیلترهای منبع داخلی: تبدیلِ امنِ عددهای رشته‌ای و مقایسهٔ بدونِ حساسیت به حروف کشور.
+- فیلترها: تبدیلِ امنِ عددهای رشته‌ای، مقایسهٔ بدون حساسیت به حروفِ کد کشور.
 - secretهای `dd` با بایتِ اضافه دیگر پیشوند را داخل کلید نگه نمی‌دارند.
-- نمایش پراکسی‌های سالم به‌صورت یک لینک کامل در هر خط (مناسب کپی در تلگرام، بدون جدول شکسته).
+- نمایش پراکسی‌های سالم به‌صورت یک لینک کامل در هر خط.
 
-### تغییرات — نسخه ۱٫۱٫۰
+**نسخه ۱٫۱٫۰**
 
-- **رفعِ باگِ بنر:** طرحِ ASCII که قبلاً `MTHPH` خوانده می‌شد اصلاح شد و
-  حالا واقعاً `MTPCH` را نشان می‌دهد.
-- **گزینه‌ی `--builtin-all`:** تستِ همه‌ی پراکسی‌هایی که backend
-  برمی‌گرداند، بدون اعمالِ هیچ‌گونه فیلترِ کیفیت (گزینه‌ی ۲ در منو).
-- **مکث بین دو مرحله:** حالا بعد از دریافتِ لیست و قبل از شروعِ تست،
-  ابزار از شما تأیید می‌خواهد تا فرصتِ خاموش/روشن کردنِ VPN را داشته
-  باشید. در ایران و سایر شبکه‌های محدود، معمولاً برای گرفتنِ لیست
-  نیاز به VPN دارید ولی برای تست باید VPN خاموش باشد تا نتیجه
-  واقعی باشد. با `--yes` این مکث حذف می‌شود.
-- اجرای تست به `as_completed` منتقل شد تا پراکسی‌های سریع بلافاصله
-  در جدولِ زنده ظاهر شوند و منتظرِ پراکسی‌های کند نمانند.
-- پیغامِ خطای واضح‌تر برای نبودِ پکیجِ `cryptography` و رفعِ هشدارِ
-  `datetime.utcnow()` در پایتون ۳٫۱۲+.
+- رفعِ باگِ بنر ASCII که قبلاً `MTHPH` خوانده می‌شد.
+- افزودنِ `--builtin-all` برای تست بدون هیچ فیلترِ کیفیت.
+- افزودنِ مکثِ دو مرحله‌ای برای خاموش/روشن کردنِ VPN.
+- انتقال حلقهٔ تست به `as_completed` تا پراکسی‌های سریع بلافاصله ظاهر شوند.
+- پیغام خطای واضح برای نبودِ `cryptography` و رفعِ هشدارِ `datetime.utcnow()`.
+
+</details>
 
 ### لایسنس
 
