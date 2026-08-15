@@ -189,14 +189,14 @@ class TestFilterHardening(unittest.TestCase):
             },
         ]
 
-        def fake_get(*a, **k):
-            return json.dumps(feed)
+        def fake_get(url, *a, **k):
+            return json.dumps(feed) if "mtpro.xyz" in url else ""
 
         with mock.patch.object(sources, "_http_get", side_effect=fake_get):
             proxies, meta = sources.load_from_builtin(
                 filter_rules={"countries": ["DE"]}
             )
-        self.assertEqual(meta["after_filter"], 1)
+        self.assertEqual(meta["total"], 1)
         self.assertEqual(proxies[0].server, "b.example.com")
 
 

@@ -8,5 +8,5 @@ exchanging a genuine ``req_pq_multi`` / ``resPQ`` handshake with a
 Telegram datacenter through the proxy.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 __all__ = ["verifier", "parser", "sources", "output", "cli"]

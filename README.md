@@ -59,7 +59,7 @@ is recorded.
 | Free-form text scanning (mixed formats)     | ✔ |
 | JSON input (objects / arrays / feed schemas)| ✔ |
 | Local files, remote URLs, stdin, inline     | ✔ |
-| Built-in upstream proxy feed                | ✔ |
+| **Built-in sources — no path needed**        | ✔  four auto-updating GitHub lists + mtpro.xyz |
 | &nbsp;&nbsp;— filtered *or* raw "all" mode  | ✔ |
 | VPN-aware pause between fetch & test        | ✔ |
 | Text / JSON / links-list output             | ✔ |
@@ -95,15 +95,16 @@ and macOS.
 
 ### Quick start
 
-Test the built-in feed (a ready-to-use upstream proxy source shipped
-with MTPCH, quality filters applied by default):
+Test the built-in sources — MTPCH ships with several auto-updating
+GitHub proxy lists plus mtpro.xyz, so you do not have to supply a feed
+or a file (quality filters apply to mtpro entries only):
 
 ```bash
 python3 mtpch.py --builtin
 ```
 
-Test **every** entry the built-in feed returns, without applying any
-quality filter:
+Test **every** entry the built-in sources return, with no quality
+filtering at all:
 
 ```bash
 python3 mtpch.py --builtin-all
@@ -209,8 +210,8 @@ Input sources
   -f, --file   FILE       Path to a file (repeatable).
   -u, --url    URL        HTTP(S) URL to download (repeatable).
   --stdin                 Read proxies from standard input.
-  --builtin               Use the built-in upstream feed (filters on).
-  --builtin-all           Use the built-in feed with NO filters —
+  --builtin               Use the built-in sources (filters on).
+  --builtin-all           Use the built-in sources with NO filters —
                           every proxy the upstream returns.
 
 Testing options
@@ -219,7 +220,7 @@ Testing options
   --dc             N      Telegram DC id to request. Default: 2.
   --retries        N      Extra retries per proxy on failure. Default: 1.
 
-Built-in feed filters (ignored with --builtin-all)
+Built-in mtpro filters (ignored with --builtin-all)
   --feed-min-uptime N     Minimum uptime percentage.
   --feed-max-ping   N     Maximum reported ping (ms).
   --feed-country    CODE  Restrict to a country code (repeatable).
@@ -254,7 +255,7 @@ python3 mtpch.py --builtin \
     --feed-max-age-hours 6
 ```
 
-Full built-in feed, no quality filters at all, 64 workers, CI mode
+All built-in sources, no quality filters, 64 workers, CI mode
 (no interactive pause):
 
 ```bash
@@ -308,6 +309,22 @@ python3 -m unittest discover -s tests -v
 ```
 
 ### Changelog
+
+**v1.3.0**
+
+- **`--builtin` now pulls from several sources instead of one.** Four GitHub
+  repos that auto-commit fresh MTProto lists (Argh94/Proxy-List,
+  kort0881/telegram-proxy-collector, Grim1313/mtproto-for-telegram,
+  SoliSpirit/mtproto) plus mtpro.xyz. Measured ~440 unique proxies against
+  ~40 from the single feed. Fetched concurrently — six sequential HTTPS
+  round-trips to GitHub raw regularly timed out. Per-source counts and
+  failures are printed, and any source can fail without failing the run.
+- **Fixed: HTML-escaped proxy links were silently unparseable.** Scraped
+  pages serve `secret=…&amp;port=…`, which broke the query split and dropped
+  the proxy. `extract_from_text` now decodes entities first.
+- **Fixed: CERTIFICATE_VERIFY_FAILED on stock Python.** python.org builds do
+  not use the system keychain, so every HTTPS fetch failed. Now uses certifi
+  when available, still verifying.
 
 **v1.2.0**
 
@@ -537,6 +554,23 @@ python3 mtpch.py --builtin-all
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+### تغییرات — نسخه ۱٫۳٫۰
+
+- **`--builtin` حالا از چند منبع می‌گیرد، نه یکی.** چهار مخزن گیت‌هاب که
+  لیست‌های تازهٔ MTProto را خودکار کامیت می‌کنند (Argh94/Proxy-List،
+  kort0881/telegram-proxy-collector، Grim1313/mtproto-for-telegram،
+  SoliSpirit/mtproto) به‌همراه mtpro.xyz. در تست واقعی ~۴۴۰ پراکسی یکتا
+  در مقابل ~۴۰ پراکسی از فیدِ تنها. درخواست‌ها هم‌زمان فرستاده می‌شوند —
+  شش درخواستِ پشت‌سرهم به GitHub raw مرتب تایم‌اوت می‌شد. تعداد و خطای
+  هر منبع چاپ می‌شود و خرابیِ یک منبع اجرا را متوقف نمی‌کند.
+- **رفع باگ: لینک‌هایی که HTML-escape شده بودند بی‌صدا خوانده نمی‌شدند.**
+  صفحه‌های اسکرپ‌شده `secret=…&amp;port=…` می‌دهند که تقسیمِ کوئری را
+  خراب می‌کرد. حالا اول entityها decode می‌شوند.
+- **رفع باگ: خطای CERTIFICATE_VERIFY_FAILED روی پایتونِ رسمی.** بیلدهای
+  python.org از keychainِ سیستم استفاده نمی‌کنند و همهٔ درخواست‌های HTTPS
+  شکست می‌خورد. حالا در صورت وجود از certifi استفاده می‌شود — تاییدِ
+  گواهی همچنان روشن است.
 
 ### تغییرات — نسخه ۱٫۲٫۰
 

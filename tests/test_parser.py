@@ -87,7 +87,7 @@ class TestParser(unittest.TestCase):
 
 
 class TestBuiltinAllMode(unittest.TestCase):
-    """``load_from_builtin(disable_filters=True)`` must keep every entry."""
+    """Built-in sources: mtpro filtering, plus the multi-source merge."""
 
     SAMPLE_FEED = [
         # An entry that would be filtered out by the defaults (low uptime).
@@ -102,25 +102,104 @@ class TestBuiltinAllMode(unittest.TestCase):
          "addTime": 9_999_999_999},
     ]
 
-    def _fake_http_get(self, *a, **kw):
-        return json.dumps(self.SAMPLE_FEED)
+    def _fake_http_get(self, url, *a, **kw):
+        """Only mtpro serves the JSON feed; the GitHub lists serve nothing.
+
+        load_from_builtin now fetches the GitHub lists too, so a blanket stub
+        would feed the same JSON to every source and the dedup would hide what
+        we are asserting about mtpro's filters.
+        """
+        if "mtpro.xyz" in url:
+            return json.dumps(self.SAMPLE_FEED)
+        return ""
 
     def test_filtered_drops_low_quality(self):
         with mock.patch.object(sources, "_http_get", side_effect=self._fake_http_get):
             proxies, meta = sources.load_from_builtin()
-        self.assertEqual(meta["total"], 2)
-        self.assertEqual(meta["after_filter"], 1)
+        self.assertEqual(meta["mtpro_total"], 2)
+        self.assertEqual(meta["total"], 1, "low-uptime entry dropped")
         self.assertFalse(meta["filters_disabled"])
         self.assertEqual(proxies[0].server, "b.example.com")
 
     def test_all_mode_keeps_every_entry(self):
         with mock.patch.object(sources, "_http_get", side_effect=self._fake_http_get):
             proxies, meta = sources.load_from_builtin(disable_filters=True)
+        self.assertEqual(meta["mtpro_total"], 2)
         self.assertEqual(meta["total"], 2)
-        self.assertEqual(meta["after_filter"], 2)
         self.assertTrue(meta["filters_disabled"])
         self.assertEqual({p.server for p in proxies},
                          {"a.example.com", "b.example.com"})
+
+    def test_merges_every_github_source(self):
+        """Each built-in list contributes, and cross-source duplicates collapse."""
+        secret = "00112233445566778899aabbccddeeff"
+
+        def fake_get(url, *a, **kw):
+            if "mtpro.xyz" in url:
+                return json.dumps(self.SAMPLE_FEED)
+            if "Argh94" in url:
+                # one unique, one that a later source repeats
+                return f"1.1.1.1:443:{secret}\n2.2.2.2:443:{secret}\n"
+            if "kort0881" in url:
+                return f"2.2.2.2:443:{secret}\n3.3.3.3:8443:dd{secret}\n"
+            return ""
+
+        with mock.patch.object(sources, "_http_get", side_effect=fake_get):
+            proxies, meta = sources.load_from_builtin(disable_filters=True)
+
+        servers = {p.server for p in proxies}
+        self.assertIn("1.1.1.1", servers)
+        self.assertIn("3.3.3.3", servers)
+        self.assertIn("b.example.com", servers, "mtpro still contributes")
+
+        by_source = {s["source"]: s for s in meta["sources"]}
+        self.assertEqual(by_source["gh:Argh94/Proxy-List"]["found"], 2)
+        self.assertEqual(
+            by_source["gh:kort0881/telegram-proxy-collector"]["found"], 1,
+            "the repeated proxy is credited to the first source only",
+        )
+
+    def test_one_dead_source_does_not_fail_the_run(self):
+        def fake_get(url, *a, **kw):
+            if "Argh94" in url:
+                raise OSError("connection reset")
+            if "mtpro.xyz" in url:
+                return json.dumps(self.SAMPLE_FEED)
+            return ""
+
+        with mock.patch.object(sources, "_http_get", side_effect=fake_get):
+            proxies, meta = sources.load_from_builtin(disable_filters=True)
+
+        self.assertEqual(len(proxies), 2, "mtpro entries still came through")
+        failed = [s for s in meta["sources"] if s.get("error")]
+        self.assertTrue(any("Argh94" in s["source"] for s in failed))
+        self.assertIn("connection reset", failed[0]["error"])
+
+    def test_mtpro_failure_leaves_the_other_sources(self):
+        secret = "00112233445566778899aabbccddeeff"
+
+        def fake_get(url, *a, **kw):
+            if "mtpro.xyz" in url:
+                raise RuntimeError("HTTP 401")
+            if "Argh94" in url:
+                return f"1.1.1.1:443:{secret}\n"
+            return ""
+
+        with mock.patch.object(sources, "_http_get", side_effect=fake_get):
+            proxies, meta = sources.load_from_builtin()
+
+        self.assertEqual([p.server for p in proxies], ["1.1.1.1"])
+        mtpro = next(s for s in meta["sources"] if s["source"] == "mtpro.xyz")
+        self.assertIn("401", mtpro["error"])
+
+    def test_builtin_sources_are_github_raw_urls(self):
+        self.assertGreaterEqual(len(sources.BUILTIN_GITHUB_SOURCES), 4)
+        for url in sources.BUILTIN_GITHUB_SOURCES:
+            self.assertIn("raw.githubusercontent.com", url)
+        self.assertFalse(
+            any("t.me" in u for u in sources.BUILTIN_GITHUB_SOURCES),
+            "no Telegram channel scraping in the built-ins",
+        )
 
 
 class TestStartTestPrompt(unittest.TestCase):

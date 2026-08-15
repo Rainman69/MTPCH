@@ -375,16 +375,14 @@ def _collect_proxies(args) -> List[ProxyInfo]:
             disable_filters=disable,
         )
         _add(proxies)
-        if disable:
-            reports.append(
-                f"built-in feed: {meta['after_filter']} proxies "
-                f"(all entries, no filter)"
-            )
-        else:
-            reports.append(
-                f"built-in feed: {meta['after_filter']} proxies after filter "
-                f"(from {meta['total']} upstream)"
-            )
+        ok, total = meta["sources_ok"], meta["source_count"]
+        reports.append(
+            f"built-in sources: {meta['total']} proxies from {ok}/{total} sources"
+            + (" (no filter)" if disable else "")
+        )
+        for s in meta["sources"]:
+            if s.get("error"):
+                _warn(f"  {s['source']}: {s['error']}")
 
     for path in args.file:
         try:

@@ -20,6 +20,7 @@ instances and silently skip malformed entries (the caller gets a
 
 from __future__ import annotations
 
+import html as _html
 import json
 import re
 from typing import Iterable, List, Tuple
@@ -198,7 +199,7 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
     """Extract every recognisable proxy from an arbitrary text blob.
 
     The scan is robust against Markdown/HTML, surrounding noise and
-    angle-bracketed URLs.  Duplicates (same ``host:port:secret``) are
+    angle-bracketed URLs.  Duplicates (same host/port/transport/secret) are
     removed while preserving order.
     """
     results: List[ProxyInfo] = []
@@ -221,8 +222,14 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
         except json.JSONDecodeError:
             pass  # fall through to regex scan
 
+    # HTML sources (Telegram's t.me/s/ channel previews, forum posts, any
+    # scraped page) escape the ampersands in a link, so the query string
+    # arrives as ``server=x&amp;port=443&amp;secret=…``.  Without decoding
+    # first, every one of those links is silently unparseable.
+    body = _html.unescape(text)
+
     # Link patterns first so we preserve full raw_secret.
-    for match in _PROXY_LINK_RE.finditer(text):
+    for match in _PROXY_LINK_RE.finditer(body):
         raw_link = _sanitize_link(match.group(0))
         try:
             p = parse_link(raw_link)
@@ -234,16 +241,16 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
             seen.add(key)
             results.append(p)
 
-    # Triplets — only look at lines not already consumed by a link to
+    # Triplets — only look at spans not already consumed by a link, to
     # avoid matching fragments of URLs.
     consumed_ranges: list[tuple[int, int]] = [
-        m.span() for m in _PROXY_LINK_RE.finditer(text)
+        m.span() for m in _PROXY_LINK_RE.finditer(body)
     ]
 
     def _inside_link(pos: int) -> bool:
         return any(start <= pos < end for start, end in consumed_ranges)
 
-    for match in _TRIPLET_RE.finditer(text):
+    for match in _TRIPLET_RE.finditer(body):
         if _inside_link(match.start()):
             continue
         try:
