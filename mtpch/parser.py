@@ -57,6 +57,17 @@ _TRIPLET_RE = re.compile(
 )
 
 
+def _dedup_key(p: ProxyInfo) -> Tuple[str, int, str, bytes]:
+    """Identity of a proxy *endpoint including its transport*.
+
+    The decoded 16-byte key is shared by the plain/``dd``/``ee`` forms of the
+    same secret, so keying on it alone collapses three genuinely different
+    transports into one.  ``secret_kind`` keeps them distinct while decoded
+    bytes still make base64/hex spellings of the same secret collide.
+    """
+    return (p.server.lower(), p.port, p.secret_kind, p.secret)
+
+
 def _build(server: str, port: str | int, secret: str, source_line: str) -> ProxyInfo:
     port_i = int(port)
     if not (0 < port_i < 65536):
@@ -191,7 +202,7 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
     removed while preserving order.
     """
     results: List[ProxyInfo] = []
-    seen: set[Tuple[str, int, bytes]] = set()
+    seen: set[Tuple[str, int, str, bytes]] = set()
 
     # Short-circuit: if the whole blob is valid JSON treat it as such
     # and skip the regex pass; that avoids re-parsing literal strings
@@ -201,7 +212,7 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
         try:
             json_proxies = parse_json(stripped)
             for p in json_proxies:
-                key = (p.server.lower(), p.port, p.secret)
+                key = _dedup_key(p)
                 if key not in seen:
                     seen.add(key)
                     results.append(p)
@@ -217,8 +228,8 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
             p = parse_link(raw_link)
         except Exception:
             continue
-        # Dedup on decoded secret bytes so base64 case variants collide correctly.
-        key = (p.server.lower(), p.port, p.secret)
+        # Dedup on (host, port, kind, decoded secret) — see _dedup_key.
+        key = _dedup_key(p)
         if key not in seen:
             seen.add(key)
             results.append(p)
@@ -239,7 +250,7 @@ def extract_from_text(text: str) -> List[ProxyInfo]:
             p = parse_triplet(match.group(0))
         except Exception:
             continue
-        key = (p.server.lower(), p.port, p.secret)
+        key = _dedup_key(p)
         if key not in seen:
             seen.add(key)
             results.append(p)
@@ -256,7 +267,7 @@ def extract_many(sources: Iterable[str]) -> Tuple[List[ProxyInfo], int]:
     a single line).  Callers use it purely for reporting.
     """
     collected: List[ProxyInfo] = []
-    seen: set[Tuple[str, int, bytes]] = set()
+    seen: set[Tuple[str, int, str, bytes]] = set()
     skipped = 0
 
     for blob in sources:
@@ -268,7 +279,7 @@ def extract_many(sources: Iterable[str]) -> Tuple[List[ProxyInfo], int]:
                 skipped += 1
             continue
         for p in proxies:
-            key = (p.server.lower(), p.port, p.secret)
+            key = _dedup_key(p)
             if key not in seen:
                 seen.add(key)
                 collected.append(p)

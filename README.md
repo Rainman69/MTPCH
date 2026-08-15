@@ -52,6 +52,8 @@ is recorded.
 | Feature                                     | Details |
 | ------------------------------------------- | ------- |
 | Real MTProto handshake, not a ping          | ✔ |
+| **All three transports: plain, `dd`, `ee`** | ✔ |
+| &nbsp;&nbsp;— Fake-TLS (`ee`) verification  | ✔ |  (HMAC-authenticated ClientHello/ServerHello) |
 | tg:// and https://t.me/proxy links          | ✔ |
 | Raw `host:port:secret` triplets             | ✔ |
 | Free-form text scanning (mixed formats)     | ✔ |
@@ -63,10 +65,19 @@ is recorded.
 | Text / JSON / links-list output             | ✔ |
 | Beautiful terminal UI (rich panels & bars)  | ✔ |
 | Working proxies as one full link per line   | ✔ |  (Telegram copy/paste safe)
+| Per-transport success counters in summary   | ✔ |
 | Bilingual, interactive menu for newcomers   | ✔ |
 | Parallel testing with configurable workers  | ✔ |
 | Proper exit codes for CI / shell scripts    | ✔ |
 | 100 % Python, cross-platform                | ✔ |
+
+### Supported secret kinds
+
+| Prefix | Transport | Notes |
+|--------|-----------|-------|
+| *(none)* | obfuscated, padded-intermediate | 16-byte secret |
+| `dd` | obfuscated, padded-intermediate | "secure" mode |
+| `ee` | **Fake-TLS** + obfuscated | secret carries a camouflage domain; the proxy is authenticated by an HMAC-SHA256 digest in the TLS `random` field, so a wrong secret is reported as `faketls`, never as a false "dead" |
 
 ### Installation
 
@@ -161,8 +172,10 @@ MTPCH auto-detects every common MTProto proxy format:
 
 Secrets can be supplied either in hexadecimal form (with or without
 the `ee`/`dd` prefix byte) **or** as URL-safe Base64. Fake-TLS
-secrets with their trailing camouflage domain are fully supported;
-MTPCH will recover and display the camouflage hostname.
+secrets with their trailing camouflage domain are fully supported:
+MTPCH recovers the camouflage hostname, uses it as the SNI in a real
+Fake-TLS handshake, and authenticates the proxy by verifying its
+HMAC-SHA256 digest before speaking MTProto through the tunnel.
 
 ### VPN-aware two-phase run
 
@@ -295,6 +308,29 @@ python3 -m unittest discover -s tests -v
 ```
 
 ### Changelog
+
+**v1.2.0**
+
+- **Fake-TLS (`ee`) proxies are now fully verified** instead of being
+  refused. New [`mtpch/faketls.py`](mtpch/faketls.py) implements the real
+  handshake: a 517-byte `ClientHello` whose `random` field is
+  `HMAC-SHA256(secret, hello_with_random_zeroed)` (timestamp XORed into the
+  last 4 bytes), verification of the server's own HMAC digest, and the
+  application-data record layer that carries the obfuscated transport.
+  A wrong secret now reports stage `faketls` with an explicit
+  "digest mismatch" instead of a misleading dead result.
+- ServerHello parsing reads TLS record headers rather than assuming the
+  commonly-quoted 127-byte record — the masked-certificate length varies
+  between MTProxy builds, which silently broke real `ee` proxies.
+- **Dedup fix:** plain/`dd`/`ee` forms of the same 16-byte secret are three
+  different transports, but the dedup key only used the decoded bytes, so
+  two of the three were silently dropped. The key now includes
+  `secret_kind` (hex/base64 spellings of the same secret still collapse).
+- Malformed camouflage domains in real-world `ee` secrets no longer raise
+  from the IDNA codec.
+- DNS resolution prefers IPv4 and falls back, instead of failing outright on
+  hosts whose first `getaddrinfo` family is unusable.
+- Summary panel reports per-transport counters (`plain:6/6 dd:7/7 ee:4/23`).
 
 **v1.1.1**
 
@@ -502,13 +538,34 @@ python3 mtpch.py --builtin-all
 python3 -m unittest discover -s tests -v
 ```
 
+### تغییرات — نسخه ۱٫۲٫۰
+
+- **پراکسی‌های Fake-TLS (`ee`) حالا کاملاً تست می‌شوند** و دیگر رد نمی‌شوند.
+  ماژول جدید [`mtpch/faketls.py`](mtpch/faketls.py) هندشِیکِ واقعی را
+  پیاده می‌کند: یک `ClientHello` ۵۱۷ بایتی که فیلد `random` آن
+  `HMAC-SHA256(secret, hello_با_random_صفرشده)` است (تایم‌استمپ با ۴ بایت
+  آخر XOR می‌شود)، سپس تاییدِ دایجستِ خودِ سرور، و لایهٔ رکوردهای
+  application-data که ترنسپورتِ obfuscated را حمل می‌کند.
+  با secretِ اشتباه، نتیجه `faketls` و پیامِ صریحِ «digest mismatch» است،
+  نه یک «مرده»ی گمراه‌کننده.
+- خواندنِ ServerHello از روی هدرِ رکوردها انجام می‌شود، نه با فرضِ رکوردِ
+  ۱۲۷ بایتی؛ طولِ گواهیِ ماسک بین نسخه‌های MTProxy متفاوت است و همین
+  موضوع پراکسی‌های `ee` واقعی را بی‌صدا خراب می‌کرد.
+- **رفع باگ حذف تکراری‌ها:** سه شکلِ plain/`dd`/`ee` از یک secret، سه
+  ترنسپورتِ متفاوت‌اند، اما کلیدِ dedup فقط بایت‌های decode‌شده را داشت و
+  دو مورد از سه مورد بی‌صدا حذف می‌شد. حالا `secret_kind` هم در کلید هست
+  (املای hex/base64 از یک secret هنوز درست ادغام می‌شود).
+- دامنه‌های پوششِ خراب در secretهای واقعی `ee` دیگر باعث خطای IDNA نمی‌شوند.
+- در DNS اول IPv4 امتحان می‌شود و در صورت شکست fallback داریم.
+- پنلِ خلاصه، شمارشِ تفکیکی هر ترنسپورت را نشان می‌دهد
+  (`plain:6/6 dd:7/7 ee:4/23`).
+
 ### تغییرات — نسخه ۱٫۱٫۱
 
 - رفع نشتِ سوکت هنگام شکستِ TCP connect.
 - حذف علائم نگارشیِ انتهای لینک در متن آزاد (مثل نقطهٔ بعد از secret).
 - حفظ کاراکتر `+` در secretهای base64 استاندارد.
 - فیلترهای منبع داخلی: تبدیلِ امنِ عددهای رشته‌ای و مقایسهٔ بدونِ حساسیت به حروف کشور.
-- secretهای Fake-TLS (`ee`): ردِ صریح با stage=`unsupported` به‌جای نتیجهٔ مردهٔ گمراه‌کننده.
 - secretهای `dd` با بایتِ اضافه دیگر پیشوند را داخل کلید نگه نمی‌دارند.
 - نمایش پراکسی‌های سالم به‌صورت یک لینک کامل در هر خط (مناسب کپی در تلگرام، بدون جدول شکسته).
 

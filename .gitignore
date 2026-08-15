@@ -13,3 +13,22 @@ dist/
 report.json
 report.txt
 live.txt
+
+# --- secrets & local state: never commit ---
+# Local admin key generated for the Worker's /scan endpoint
+worker/.dev-admin-key
+.dev-admin-key
+# Wrangler local build/state dirs
+.wrangler/
+worker/.wrangler/
+node_modules/
+worker/node_modules/
+# Env files
+.env
+.env.*
+!.env.example
+# Local MTProxy test rig (contains a generated proxy secret)
+.mtpch-testproxy/
+
+# Serverless edition is developed outside this repo for now
+worker/

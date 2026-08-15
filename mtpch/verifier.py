@@ -31,6 +31,14 @@ import struct
 import time
 from typing import Callable, Optional, Tuple
 
+from .faketls import (
+    FakeTLSError,
+    TLSRecordReader,
+    build_client_hello,
+    read_and_verify_server_hello,
+    wrap_application_data,
+)
+
 # ---------------------------------------------------------------------------
 # Minimal AES-256-CTR implementation backed by ``cryptography`` when available
 # with a pure-python fallback so the tool has no hard C-extension requirement.
@@ -282,35 +290,43 @@ def verify_proxy(
 ) -> VerifyResult:
     """Run a real connectivity check against ``proxy``.
 
+    Supports all three MTProxy secret kinds:
+
+    * ``plain`` / ``dd`` — obfuscated transport directly on the socket
+    * ``ee`` — the same transport tunnelled inside a Fake-TLS session
+
     The function never raises; transient network failures are reported
     through :class:`VerifyResult`.
     """
-    # Fake-TLS (ee) secrets wrap the obfuscated stream in a TLS-looking
-    # ClientHello. Speaking plain obfuscated transport against them only
-    # produces systematic false negatives, so refuse early with a clear stage.
-    if proxy.secret_kind == "ee":
+    start = time.monotonic()
+    stage = "dns"
+    fake_tls_domain = proxy_fake_tls_domain(proxy) if proxy.secret_kind == "ee" else None
+
+    def fail(msg: str, at: str | None = None) -> VerifyResult:
         return VerifyResult(
             proxy,
             False,
             None,
-            "unsupported",
-            "Fake-TLS (ee) secrets are not supported yet "
-            "(plain/dd obfuscated transport only)",
-            fake_tls_domain=proxy_fake_tls_domain(proxy),
+            at or stage,
+            msg,
+            fake_tls_domain=fake_tls_domain,
             dc_id=dc_id,
         )
 
-    start = time.monotonic()
-    stage = "dns"
     try:
         # Resolve the target once so DNS failures are attributable to a
         # distinct stage instead of getting rolled into a generic socket
-        # error.
-        addr_info = socket.getaddrinfo(
-            proxy.server, proxy.port, proto=socket.IPPROTO_TCP
-        )
+        # error.  Prefer IPv4 but fall back to whatever resolves.
+        try:
+            addr_info = socket.getaddrinfo(
+                proxy.server, proxy.port, socket.AF_INET, socket.SOCK_STREAM
+            )
+        except socket.gaierror:
+            addr_info = socket.getaddrinfo(
+                proxy.server, proxy.port, 0, socket.SOCK_STREAM
+            )
         if not addr_info:
-            return VerifyResult(proxy, False, None, stage, "DNS resolution failed")
+            return fail("DNS resolution failed")
 
         family, socktype, sproto, _, sockaddr = addr_info[0]
 
@@ -321,143 +337,112 @@ def verify_proxy(
             sock.settimeout(timeout)
             try:
                 sock.connect(sockaddr)
-            except (ConnectionRefusedError, OSError) as exc:
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"TCP connect failed: {exc.__class__.__name__}: {exc}",
-                )
+            except OSError as exc:
+                return fail(f"TCP connect failed: {exc.__class__.__name__}: {exc}")
 
             sock.settimeout(timeout)
-            stage = "handshake"
-            init_frame, encrypt, decrypt = _build_obfuscated_init(
-                proxy.secret, dc_id
-            )
-            try:
-                sock.sendall(init_frame)
-            except OSError as exc:
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"sendall(init) failed: {exc}",
-                )
 
-            envelope, nonce = _build_req_pq_multi()
-            wrapped = _wrap_padded_intermediate(envelope)
-            encrypted_wrapped = encrypt(wrapped)
+            def recv_exact(n: int) -> bytes:
+                return _recv_exact(sock, n)
+
+            # ---- optional Fake-TLS camouflage layer ----
+            read_exactly: Callable[[int], bytes] = recv_exact
+
+            def send_raw(data: bytes) -> None:
+                sock.sendall(data)
+
+            send: Callable[[bytes], None] = send_raw
+
+            if proxy.secret_kind == "ee":
+                stage = "faketls"
+                try:
+                    hello, client_digest, session_id = build_client_hello(
+                        proxy.secret, fake_tls_domain or ""
+                    )
+                    sock.sendall(hello)
+                    read_and_verify_server_hello(
+                        recv_exact, proxy.secret, client_digest, session_id
+                    )
+                except FakeTLSError as exc:
+                    return fail(str(exc))
+                except _RecvError as exc:
+                    return fail(f"no Fake-TLS reply: {exc}")
+                except OSError as exc:
+                    return fail(f"Fake-TLS socket error: {exc}")
+
+                record_reader = TLSRecordReader(recv_exact)
+                read_exactly = record_reader.read_exactly
+
+                def send_tls(data: bytes) -> None:
+                    sock.sendall(wrap_application_data(data))
+
+                send = send_tls
+
+            # ---- obfuscated MTProto transport ----
+            stage = "handshake"
+            init_frame, encrypt, decrypt = _build_obfuscated_init(proxy.secret, dc_id)
             try:
-                sock.sendall(encrypted_wrapped)
+                send(init_frame)
+                envelope, nonce = _build_req_pq_multi()
+                send(encrypt(_wrap_padded_intermediate(envelope)))
             except OSError as exc:
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"sendall(req_pq_multi) failed: {exc}",
-                )
+                return fail(f"send failed: {exc}")
+            except FakeTLSError as exc:
+                return fail(str(exc), "faketls")
 
             stage = "telegram"
             try:
-                length_ct = _recv_exact(sock, 4)
+                length_bytes = decrypt(read_exactly(4))
+            except FakeTLSError as exc:
+                return fail(str(exc), "faketls")
             except _RecvError as exc:
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"no reply from proxy: {exc}",
-                )
-            length_bytes = decrypt(length_ct)
+                return fail(f"no reply from proxy: {exc}")
+
             (total_len,) = struct.unpack("<I", length_bytes)
 
             # Intermediate MSB = quick-ack; some proxies also surface
             # signed 4-byte transport errors with the high bit set.
             if total_len & 0x80000000:
                 err_code = struct.unpack("<i", length_bytes)[0]
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"transport error / quick-ack ({err_code})",
-                )
+                return fail(f"transport error / quick-ack ({err_code})")
 
             if total_len < 8 or total_len > 1 << 20:
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"implausible reply length {total_len}",
-                )
+                return fail(f"implausible reply length {total_len}")
 
             try:
-                body_ct = _recv_exact(sock, total_len)
+                body = decrypt(read_exactly(total_len))
+            except FakeTLSError as exc:
+                return fail(str(exc), "faketls")
             except _RecvError as exc:
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"short reply ({exc})",
-                )
-            body = decrypt(body_ct)
+                return fail(f"short reply ({exc})")
 
             # Unencrypted MTProto reply structure:
             #   auth_key_id (int64 = 0) | message_id (int64) |
             #   message_len (int32) | payload
             if len(body) < 20:
-                return VerifyResult(
-                    proxy, False, None, stage, "truncated MTProto reply",
-                )
+                return fail("truncated MTProto reply")
 
             auth_key_id = struct.unpack("<q", body[:8])[0]
             if auth_key_id != 0:
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"unexpected auth_key_id={auth_key_id:#x}",
-                )
+                return fail(f"unexpected auth_key_id={auth_key_id:#x}")
 
             msg_len = struct.unpack("<I", body[16:20])[0]
-            if msg_len + 20 > len(body) or msg_len < 4:
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"invalid inner message length {msg_len}",
-                )
+            if msg_len < 4 or msg_len + 20 > len(body):
+                return fail(f"invalid inner message length {msg_len}")
 
-            payload = body[20 : 20 + msg_len]
+            payload = body[20:20 + msg_len]
             ctor = struct.unpack("<I", payload[:4])[0]
             if ctor != _CTOR_RES_PQ:
-                return VerifyResult(
-                    proxy,
-                    False,
-                    None,
-                    stage,
-                    f"wrong constructor {ctor:#x}, expected resPQ",
-                )
+                return fail(f"wrong constructor {ctor:#x}, expected resPQ")
 
-            # resPQ echoes our nonce back in the first 16 bytes after
-            # the ctor; verifying it confirms we are really talking to a
-            # Telegram DC (any MITM that does not know MTProto would not
-            # be able to craft a valid resPQ with our nonce).
+            # resPQ echoes our nonce back in the first 16 bytes after the
+            # ctor; verifying it confirms we are really talking to a
+            # Telegram DC (anything that does not speak MTProto could not
+            # craft a valid resPQ carrying our nonce).
             if len(payload) < 4 + 16:
-                return VerifyResult(
-                    proxy, False, None, stage, "resPQ truncated"
-                )
-            if payload[4 : 4 + 16] != nonce:
-                return VerifyResult(
-                    proxy, False, None, stage, "resPQ nonce mismatch",
-                )
+                return fail("resPQ truncated")
+            if payload[4:4 + 16] != nonce:
+                return fail("resPQ nonce mismatch")
 
             latency = (time.monotonic() - start) * 1000.0
             return VerifyResult(
@@ -466,18 +451,16 @@ def verify_proxy(
                 latency,
                 "ok",
                 None,
-                fake_tls_domain=proxy_fake_tls_domain(proxy),
+                fake_tls_domain=fake_tls_domain,
                 dc_id=dc_id,
             )
 
     except socket.gaierror as exc:
-        return VerifyResult(proxy, False, None, "dns", f"DNS error: {exc}")
+        return fail(f"DNS error: {exc}", "dns")
     except socket.timeout:
-        return VerifyResult(proxy, False, None, stage, f"timeout after {timeout:.1f}s")
+        return fail(f"timeout after {timeout:.1f}s")
     except Exception as exc:  # defensive fallback
-        return VerifyResult(
-            proxy, False, None, stage, f"{exc.__class__.__name__}: {exc}"
-        )
+        return fail(f"{exc.__class__.__name__}: {exc}")
 
 
 def proxy_fake_tls_domain(proxy: ProxyInfo) -> Optional[str]:

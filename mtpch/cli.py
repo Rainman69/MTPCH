@@ -17,6 +17,7 @@ from typing import List, Optional
 from . import __version__
 from . import output as _output
 from . import sources as _sources
+from .parser import _dedup_key
 from .verifier import ProxyInfo, VerifyResult, verify_proxy
 
 # ---------------------------------------------------------------------------
@@ -351,7 +352,7 @@ def _collect_proxies(args) -> List[ProxyInfo]:
 
     def _add(proxies: List[ProxyInfo]):
         for p in proxies:
-            key = (p.server.lower(), p.port, p.secret)
+            key = _dedup_key(p)
             if key not in seen:
                 seen.add(key)
                 collected.append(p)
@@ -619,6 +620,15 @@ def _render_summary(results: List[VerifyResult]) -> None:
     alive = [r for r in results if r.alive]
     total = len(results)
     dead = total - len(alive)
+    by_kind: dict[str, list[int]] = {}
+    for r in results:
+        slot = by_kind.setdefault(r.proxy.secret_kind, [0, 0])
+        slot[0] += 1
+        if r.alive:
+            slot[1] += 1
+    kind_line = "  ".join(
+        f"{kind}:{ok}/{n}" for kind, (n, ok) in sorted(by_kind.items())
+    )
     if _HAS_RICH:
         pct = (100.0 * len(alive) / total) if total else 0.0
         panel = (
@@ -626,6 +636,7 @@ def _render_summary(results: List[VerifyResult]) -> None:
             f"[bold green]Alive:[/bold green]  {len(alive)}\n"
             f"[bold red]Dead :[/bold red]  {dead}\n"
             f"[bold]Success rate:[/bold] {pct:0.1f}%\n"
+            f"[bold]By secret:[/bold] {kind_line}\n"
         )
         if alive:
             latencies = [r.latency_ms for r in alive if r.latency_ms is not None]
@@ -633,7 +644,9 @@ def _render_summary(results: List[VerifyResult]) -> None:
             panel += f"[bold]Average RTT:[/bold] {avg:0.1f} ms"
         console.print(Panel.fit(panel, title="Summary", border_style="green"))
     else:
-        console.print(f"Total:{total}  Alive:{len(alive)}  Dead:{dead}")
+        console.print(
+            f"Total:{total}  Alive:{len(alive)}  Dead:{dead}  [{kind_line}]"
+        )
 
 
 # ---------------------------------------------------------------------------

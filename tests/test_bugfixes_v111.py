@@ -98,16 +98,19 @@ class TestSocketClosedOnConnectFail(unittest.TestCase):
         self.assertTrue(created[0].closed)
 
 
-class TestFakeTLSUnsupported(unittest.TestCase):
-    def test_ee_refused_without_network(self):
+class TestFakeTLSNowSupported(unittest.TestCase):
+    """``ee`` secrets used to be refused outright; they are now verified."""
+
+    def test_ee_reaches_the_network_instead_of_being_refused(self):
         secret = "ee" + "a" * 32 + bytes("example.com", "ascii").hex()
         raw, kind, dom = decode_secret(secret)
         self.assertEqual(kind, "ee")
-        proxy = ProxyInfo("1.2.3.4", 443, raw, secret, kind)
-        r = verify_proxy(proxy, timeout=0.1)
+        proxy = ProxyInfo("127.0.0.1", 1, raw, secret, kind)
+        r = verify_proxy(proxy, timeout=0.5)
         self.assertFalse(r.alive)
-        self.assertEqual(r.stage, "unsupported")
-        self.assertIn("Fake-TLS", r.error or "")
+        # port 1 refuses: we must fail at connect, never at "unsupported"
+        self.assertEqual(r.stage, "connect")
+        self.assertNotIn("not supported", (r.error or "").lower())
         self.assertEqual(r.fake_tls_domain, "example.com")
 
 
